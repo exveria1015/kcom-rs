@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-description = "Zero-copy COM runtime for Windows kernel drivers with macro-generated VTables."
+description = "Zero-copy COM runtime for Windows kernel drivers in Rust."
+repository = "https://github.com/exveria1015/kcom-rs"
+homepage = "https://github.com/exveria1015/kcom-rs"
+documentation = "https://docs.rs/kcom"
 keywords = ["com", "windows", "kernel", "wdk", "no_std"]
 categories = ["os::windows-apis", "no-std"]
 
