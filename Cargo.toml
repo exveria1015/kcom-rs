@@ -1,0 +1,24 @@
+[package]
+name = "kcom"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+description = "Zero-copy COM runtime for Windows kernel drivers with macro-generated VTables."
+keywords = ["com", "windows", "kernel", "wdk", "no_std"]
+categories = ["os::windows-apis", "no-std"]
+
+[dependencies]
+paste = "1"
+wdk-sys = { version = "0.5.1", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+[features]
+default = []
+async-com = []
+async-impl = ["async-com", "async-trait"]
+async-com-kernel = ["async-com", "wdk-sys"]
+
+[[example]]
+name = "declare_com_interface_async"
+required-features = ["async-com"]
