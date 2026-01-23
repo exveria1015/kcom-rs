@@ -1,11 +1,12 @@
+// executor.rs
+
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-#![allow(unexpected_cfgs)]
-
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use core::future::Future;
-use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use core::task::{Context, Poll, Wake, Waker};
 
 #[cfg(all(
     feature = "async-com-kernel",
@@ -13,85 +14,82 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 ))]
 mod kernel {
     use super::*;
-
     use wdk_sys::ntddk::{
         KeInitializeEvent, KeSetEvent, KeWaitForSingleObject, KEVENT, KWAIT_REASON,
         SynchronizationEvent, _MODE,
     };
+    
+    // SAFETY: KEVENT is thread-safe for synchronization.
+    struct KernelEvent(core::cell::UnsafeCell<KEVENT>);
+    unsafe impl Send for KernelEvent {}
+    unsafe impl Sync for KernelEvent {}
 
-    #[cfg(debug_assertions)]
-    use wdk_sys::ntddk::{KeGetCurrentIrql, DISPATCH_LEVEL, LARGE_INTEGER, STATUS_TIMEOUT};
+    impl KernelEvent {
+        fn new() -> Arc<Self> {
+            let event = Arc::new(Self(core::cell::UnsafeCell::new(unsafe { core::mem::zeroed() })));
+            unsafe {
+                KeInitializeEvent(event.0.get(), SynchronizationEvent, 0);
+            }
+            event
+        }
 
-    /// Execute a Future synchronously in kernel mode by blocking the current thread.
-    pub fn block_on<F: Future>(future: F) -> F::Output {
-        #[cfg(debug_assertions)]
-        unsafe {
-            let irql = KeGetCurrentIrql();
-            if irql >= DISPATCH_LEVEL {
-                panic!("CRITICAL: Attempted to block_on at DISPATCH_LEVEL!");
+        fn wait(&self) {
+            unsafe {
+                KeWaitForSingleObject(
+                    self.0.get() as *mut _,
+                    KWAIT_REASON::Executive,
+                    _MODE::KernelMode as i8,
+                    0,
+                    core::ptr::null_mut(),
+                );
             }
         }
 
-        let mut event: KEVENT = unsafe { core::mem::zeroed() };
+        fn signal(&self) {
+            unsafe {
+                KeSetEvent(self.0.get(), 0, 0);
+            }
+        }
+    }
+
+    impl Wake for KernelEvent {
+        fn wake(self: Arc<Self>) {
+            self.signal();
+        }
+        
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.signal();
+        }
+    }
+
+    /// Execute a Future synchronously in kernel mode.
+    ///
+    /// # Safety
+    /// This function blocks the current thread. 
+    /// - Do NOT call this at IRQL > APC_LEVEL (e.g. DISPATCH_LEVEL).
+    /// - Do NOT call this if the current thread owns resources that might cause a deadlock.
+    pub fn block_on<F: Future>(future: F) -> F::Output {
+        // IRQL Check (Debug only)
+        #[cfg(debug_assertions)]
         unsafe {
-            KeInitializeEvent(&mut event, SynchronizationEvent, 0);
+            use wdk_sys::ntddk::{KeGetCurrentIrql, DISPATCH_LEVEL};
+            if KeGetCurrentIrql() >= DISPATCH_LEVEL as u8 {
+                panic!("CRITICAL: block_on called at DISPATCH_LEVEL or higher!");
+            }
         }
 
-        let waker = unsafe { Waker::from_raw(raw_waker(&mut event)) };
+        let event = KernelEvent::new();
+        let waker = Waker::from(event.clone());
         let mut cx = Context::from_waker(&waker);
-
         let mut future = Box::pin(future);
 
         loop {
             match future.as_mut().poll(&mut cx) {
                 Poll::Ready(result) => return result,
-                Poll::Pending => unsafe {
-                    #[cfg(debug_assertions)]
-                    let mut timeout = LARGE_INTEGER { QuadPart: -50_000_000 };
-                    #[cfg(debug_assertions)]
-                    let timeout_ptr = &mut timeout as *mut LARGE_INTEGER;
-                    #[cfg(not(debug_assertions))]
-                    let timeout_ptr = core::ptr::null_mut();
-
-                    let status = KeWaitForSingleObject(
-                        &mut event as *mut _ as *mut _,
-                        KWAIT_REASON::Executive,
-                        _MODE::KernelMode as i8,
-                        0,
-                        timeout_ptr as *mut _,
-                    );
-
-                    #[cfg(debug_assertions)]
-                    if status == STATUS_TIMEOUT {
-                        panic!("DEADLOCK DETECTED in async block!");
-                    }
-                },
+                Poll::Pending => event.wait(),
             }
         }
     }
-
-    unsafe fn raw_waker(ptr: *mut KEVENT) -> RawWaker {
-        RawWaker::new(ptr as *const (), &VTABLE)
-    }
-
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_waker, wake, wake_by_ref, drop_waker);
-
-    unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
-        unsafe { raw_waker(ptr as *mut KEVENT) }
-    }
-
-    unsafe fn wake(ptr: *const ()) {
-        unsafe { wake_by_ref(ptr) }
-    }
-
-    unsafe fn wake_by_ref(ptr: *const ()) {
-        let event = ptr as *mut KEVENT;
-        unsafe {
-            KeSetEvent(event, 0, 0);
-        }
-    }
-
-    unsafe fn drop_waker(_ptr: *const ()) {}
 }
 
 #[cfg(not(all(
@@ -100,48 +98,68 @@ mod kernel {
 )))]
 mod host {
     use super::*;
+    use core::sync::atomic::{AtomicU32, Ordering};
+    
+    // Polyfill or import WaitOnAddress from windows-sys / winapi
+    // Here we assume windows-sys is available or we link against Synchronization.lib
+    #[link(name = "Synchronization")]
+    extern "system" {
+        fn WaitOnAddress(
+            Address: *const core::ffi::c_void,
+            CompareAddress: *const core::ffi::c_void,
+            AddressSize: usize,
+            dwMilliseconds: u32,
+        ) -> i32;
+        
+        fn WakeByAddressSingle(Address: *const core::ffi::c_void);
+    }
 
-    use core::sync::atomic::{AtomicBool, Ordering};
+    const PENDING: u32 = 0;
+    const NOTIFIED: u32 = 1;
 
-    pub fn block_on<F: Future>(future: F) -> F::Output {
-        let ready = AtomicBool::new(false);
-        let waker = unsafe { Waker::from_raw(raw_waker(&ready)) };
-        let mut cx = Context::from_waker(&waker);
-        let mut future = Box::pin(future);
+    struct HostSignal(AtomicU32);
 
-        loop {
-            ready.store(false, Ordering::Release);
-            match future.as_mut().poll(&mut cx) {
-                Poll::Ready(result) => return result,
-                Poll::Pending => {
-                    while !ready.swap(false, Ordering::Acquire) {
-                        core::hint::spin_loop();
-                    }
+    impl Wake for HostSignal {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            if self.0.swap(NOTIFIED, Ordering::Release) == PENDING {
+                unsafe {
+                    WakeByAddressSingle(self.0.as_ptr() as *const _);
                 }
             }
         }
     }
 
-    unsafe fn raw_waker(flag: *const AtomicBool) -> RawWaker {
-        RawWaker::new(flag as *const (), &VTABLE)
+    pub fn block_on<F: Future>(future: F) -> F::Output {
+        let signal = Arc::new(HostSignal(AtomicU32::new(PENDING)));
+        let waker = Waker::from(signal.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+
+        loop {
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(result) => return result,
+                Poll::Pending => {
+                    let mut value = signal.0.load(Ordering::Acquire);
+                    while value == PENDING {
+                         unsafe {
+                             WaitOnAddress(
+                                 signal.0.as_ptr() as *const _,
+                                 &PENDING as *const _ as *const _,
+                                 4,
+                                 0xFFFFFFFF // INFINITE
+                             );
+                         }
+                         value = signal.0.load(Ordering::Acquire);
+                    }
+                    // Reset for next poll
+                    signal.0.store(PENDING, Ordering::Release);
+                }
+            }
+        }
     }
-
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_waker, wake, wake_by_ref, drop_waker);
-
-    unsafe fn clone_waker(ptr: *const ()) -> RawWaker {
-        unsafe { raw_waker(ptr as *const AtomicBool) }
-    }
-
-    unsafe fn wake(ptr: *const ()) {
-        unsafe { wake_by_ref(ptr) }
-    }
-
-    unsafe fn wake_by_ref(ptr: *const ()) {
-        let flag = unsafe { &*(ptr as *const AtomicBool) };
-        flag.store(true, Ordering::Release);
-    }
-
-    unsafe fn drop_waker(_ptr: *const ()) {}
 }
 
 #[cfg(all(
