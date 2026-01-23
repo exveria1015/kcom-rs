@@ -1,6 +1,6 @@
 [package]
 name = "kcom"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -21,6 +21,9 @@ default = []
 async-com = []
 async-impl = ["async-com", "async-trait"]
 async-com-kernel = ["async-com", "wdk-sys"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(driver_model__driver_type, values("WDM", "KMDF"))'] }
 
 [package.metadata.docs.rs]
 features = ["async-impl"]

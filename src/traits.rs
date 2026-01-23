@@ -24,11 +24,12 @@ pub trait ComImpl<I: InterfaceVtable>: Sized + Sync + 'static {
     const VTABLE: &'static I;
 
     /// Checks if this object supports the interface `riid`.
-    /// Returns a pointer to the *interface VTable* (not the inner object) if supported.
+    /// Returns a *stable COM interface pointer* (typically `this`) if supported.
     ///
-    /// The `ComObject` wrapper handles `IUnknown` automatically.
-    /// You should implement this to support additional interfaces (e.g. via aggregation).
-    fn query_interface(&self, riid: &GUID) -> Option<*mut c_void>;
+    /// The `ComObject` wrapper handles `IID_IUNKNOWN` automatically. For other interfaces,
+    /// return the same `this` pointer for all supported IIDs to preserve COM identity.
+    /// Avoid allocating or returning transient pointers.
+    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void>;
 }
 
 /// Marker trait for any type that can be a COM object inner.
@@ -54,7 +55,7 @@ where
     };
 
     #[inline]
-    fn query_interface(&self, _riid: &GUID) -> Option<*mut c_void> {
+    fn query_interface(&self, _this: *mut c_void, _riid: &GUID) -> Option<*mut c_void> {
         // FIX: Never return `self` here. The inner object T is NOT a COM pointer.
         // The wrapper handles IID_IUNKNOWN.
         None

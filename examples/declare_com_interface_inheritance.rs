@@ -53,11 +53,11 @@ impl ComImpl<IMiniportVtbl> for Miniport {
         init: shim_IMiniport_init::<Miniport>,
     };
 
-    fn query_interface(&self, riid: &GUID) -> Option<*mut c_void> {
+    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
         if *riid == <IMiniportInterface as ComInterfaceInfo>::IID {
-            Some(self as *const Miniport as *mut c_void)
+            Some(this)
         } else {
-            <Miniport as ComImpl<IUnknownVtbl>>::query_interface(self, riid)
+            <Miniport as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
         }
     }
 }
@@ -68,11 +68,11 @@ impl ComImpl<IMiniportWaveRTVtbl> for Miniport {
         new_stream: shim_IMiniportWaveRT_new_stream::<Miniport>,
     };
 
-    fn query_interface(&self, riid: &GUID) -> Option<*mut c_void> {
+    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
         if *riid == <IMiniportWaveRTInterface as ComInterfaceInfo>::IID {
-            Some(self as *const Miniport as *mut c_void)
+            Some(this)
         } else {
-            <Miniport as ComImpl<IMiniportVtbl>>::query_interface(self, riid)
+            <Miniport as ComImpl<IMiniportVtbl>>::query_interface(self, this, riid)
         }
     }
 }

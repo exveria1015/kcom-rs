@@ -48,11 +48,16 @@ where
     }
 
     #[inline(always)]
+    /// # Safety
+    /// `ptr` must be a valid pointer to a `ComObject<T, I>` allocated by this crate.
+    /// The pointer must be properly aligned and remain valid for the returned lifetime.
     pub unsafe fn from_ptr<'a>(ptr: *mut c_void) -> &'a Self {
         unsafe { &*(ptr as *const Self) }
     }
 
     #[allow(non_snake_case)]
+    /// # Safety
+    /// `this` must be a valid COM pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_add_ref(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_ptr(this) };
         if let Some(outer) = wrapper.outer_unknown {
@@ -64,6 +69,8 @@ where
     }
 
     #[allow(non_snake_case)]
+    /// # Safety
+    /// `this` must be a valid COM pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_release(this: *mut c_void) -> u32 {
         let wrapper = unsafe { &*(this as *const Self) };
         if let Some(outer) = wrapper.outer_unknown {
@@ -84,6 +91,9 @@ where
     }
 
     #[allow(non_snake_case)]
+    /// # Safety
+    /// `this` must be a valid COM pointer created by `ComObject` for `T`.
+    /// `riid` and `ppv` must be valid, non-null pointers.
     pub unsafe extern "system" fn shim_query_interface(
         this: *mut c_void,
         riid: *const GUID,
@@ -108,7 +118,7 @@ where
             return STATUS_SUCCESS;
         }
 
-        if let Some(ptr) = wrapper.inner.query_interface(riid) {
+        if let Some(ptr) = wrapper.inner.query_interface(this, riid) {
             unsafe { ((*(ptr as *mut IUnknownVtbl)).AddRef)(ptr) };
             unsafe { *ppv = ptr };
             return STATUS_SUCCESS;

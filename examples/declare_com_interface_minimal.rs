@@ -1,8 +1,8 @@
 use core::ffi::c_void;
 
 use kcom::{
-    declare_com_interface, impl_com_object, ComImpl, ComInterfaceInfo, ComObject, GUID, IUnknown,
-    IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
+    declare_com_interface, impl_com_object, ComImpl, ComInterfaceInfo, ComObject, GUID, IUnknownVtbl,
+    NTSTATUS, STATUS_SUCCESS,
 };
 
 declare_com_interface! {
@@ -33,11 +33,11 @@ impl ComImpl<IFooVtbl> for Foo {
         ping: shim_IFoo_ping::<Foo>,
     };
 
-    fn query_interface(&self, riid: &GUID) -> Option<*mut c_void> {
+    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
         if *riid == <IFooInterface as ComInterfaceInfo>::IID {
-            Some(self as *const Foo as *mut c_void)
+            Some(this)
         } else {
-            <Foo as ComImpl<IUnknownVtbl>>::query_interface(self, riid)
+            <Foo as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
         }
     }
 }

@@ -60,11 +60,11 @@ impl ComImpl<IAsyncFooVtbl> for AsyncFoo {
         init: shim_IAsyncFoo_init::<AsyncFoo>,
     };
 
-    fn query_interface(&self, riid: &GUID) -> Option<*mut c_void> {
+    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
         if *riid == <IAsyncFooInterface as ComInterfaceInfo>::IID {
-            Some(self as *const AsyncFoo as *mut c_void)
+            Some(this)
         } else {
-            <AsyncFoo as ComImpl<IUnknownVtbl>>::query_interface(self, riid)
+            <AsyncFoo as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
         }
     }
 }

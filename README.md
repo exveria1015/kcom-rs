@@ -54,11 +54,11 @@ impl ComImpl<IFooVtbl> for Foo {
         ping: shim_IFoo_ping::<Foo>,
     };
 
-    fn query_interface(&self, riid: &GUID) -> Option<*mut c_void> {
+    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
         if *riid == <IFooInterface as ComInterfaceInfo>::IID {
-            Some(self as *const Foo as *mut c_void)
+            Some(this)
         } else {
-            <Foo as ComImpl<IUnknownVtbl>>::query_interface(self, riid)
+            <Foo as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
         }
     }
 }
@@ -136,13 +136,19 @@ impl IMyDriver for MyDriver {
 }
 ```
 
+### Async blocking caveat
+
+Async COM shims block the calling thread while polling the future. Avoid awaiting re-entrant
+COM calls on the same thread (deadlock risk). Design async methods to complete without needing
+the caller thread to pump messages.
+
 ## Kernel safety notes
 
 The blocking executor waits in kernel mode. For safe usage:
 
 1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher is rejected (debug assertion)
 2. **Watchdog**: debug-only timeout detects deadlocks
-3. **Stack safety**: futures are heap-pinned via `Box::pin`
+3. **Stack safety**: wakers use heap-owned events (`Arc`) and futures are heap-pinned via `Box::pin`
 
 Each async call allocates a boxed future. This is suitable for control paths (init, create, etc.).
 Real-time / hot paths may require allocation-free designs.

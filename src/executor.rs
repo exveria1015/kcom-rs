@@ -5,8 +5,9 @@
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::task::Wake;
 use core::future::Future;
-use core::task::{Context, Poll, Wake, Waker};
+use core::task::{Context, Poll, Waker};
 
 #[cfg(all(
     feature = "async-com-kernel",
@@ -103,7 +104,7 @@ mod host {
     // Polyfill or import WaitOnAddress from windows-sys / winapi
     // Here we assume windows-sys is available or we link against Synchronization.lib
     #[link(name = "Synchronization")]
-    extern "system" {
+    unsafe extern "system" {
         fn WaitOnAddress(
             Address: *const core::ffi::c_void,
             CompareAddress: *const core::ffi::c_void,

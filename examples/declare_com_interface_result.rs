@@ -37,11 +37,11 @@ impl ComImpl<IResultSampleVtbl> for Worker {
         do_work: shim_IResultSample_do_work::<Worker>,
     };
 
-    fn query_interface(&self, riid: &GUID) -> Option<*mut c_void> {
+    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
         if *riid == <IResultSampleInterface as ComInterfaceInfo>::IID {
-            Some(self as *const Worker as *mut c_void)
+            Some(this)
         } else {
-            <Worker as ComImpl<IUnknownVtbl>>::query_interface(self, riid)
+            <Worker as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
         }
     }
 }
