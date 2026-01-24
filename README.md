@@ -10,12 +10,16 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - **Macro-generated VTables** via `declare_com_interface!`
 - **Result -> NTSTATUS** mapping in shims
 - **Optional async support (Experimental)** with a blocking executor
+- **QueryInterface helper macro** for multi-interface support
+- **Reference-counted ComRc** smart pointer for client-side COM usage
+- **Kernel Unicode helpers** for `UNICODE_STRING`
 
 ## Feature flags
 
 - `async-com`: enables async method support in `declare_com_interface!`
 - `async-impl`: enables `async-com` and re-exports `async-trait` as `#[kcom::async_impl]`
 - `async-com-kernel`: enables `async-com` and `wdk-sys` (kernel builds)
+- `kernel-unicode`: enables `UNICODE_STRING` helpers (requires `wdk-sys`)
 
 ## Usage (sync interface)
 
@@ -55,11 +59,13 @@ impl ComImpl<IFooVtbl> for Foo {
     };
 
     fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
-        if *riid == <IFooInterface as ComInterfaceInfo>::IID {
-            Some(this)
-        } else {
-            <Foo as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
-        }
+        kcom::impl_query_interface!(
+            Self,
+            this,
+            riid,
+            [IFoo],
+            fallback = IUnknownVtbl
+        )
     }
 }
 
@@ -146,12 +152,35 @@ the caller thread to pump messages.
 
 The blocking executor waits in kernel mode. For safe usage:
 
-1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher is rejected (debug assertion)
+1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher is rejected (always enforced)
 2. **Watchdog**: debug-only timeout detects deadlocks
 3. **Stack safety**: wakers use heap-owned events (`Arc`) and futures are heap-pinned via `Box::pin`
 
 Each async call allocates a boxed future. This is suitable for control paths (init, create, etc.).
 Real-time / hot paths may require allocation-free designs.
+
+## Client-side COM pointers
+
+Use `ComRc<T>` to manage COM references safely (AddRef/Release).
+
+```rust
+use kcom::ComRc;
+
+// SAFETY: `raw` must be a valid COM interface pointer.
+let com_ref = unsafe { ComRc::from_raw_addref(raw).unwrap() };
+let raw_again = com_ref.as_ptr();
+```
+
+## Unicode helpers (kernel)
+
+Enable the `kernel-unicode` feature to construct and read `UNICODE_STRING` values.
+
+```rust
+use kcom::OwnedUnicodeString;
+
+let name = OwnedUnicodeString::new("\\Device\\MyDriver").unwrap();
+let unicode = name.as_unicode();
+```
 
 ## License
 

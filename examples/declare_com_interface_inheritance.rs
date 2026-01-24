@@ -1,8 +1,6 @@
-use core::ffi::c_void;
-
 use kcom::{
-    declare_com_interface, impl_com_object, ComImpl, ComInterfaceInfo, ComObject, GUID, IUnknownVtbl,
-    NTSTATUS, STATUS_SUCCESS,
+    declare_com_interface, impl_com_object, impl_query_interface, ComImpl, ComObject, GUID,
+    IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
 };
 
 declare_com_interface! {
@@ -53,12 +51,12 @@ impl ComImpl<IMiniportVtbl> for Miniport {
         init: shim_IMiniport_init::<Miniport>,
     };
 
-    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
-        if *riid == <IMiniportInterface as ComInterfaceInfo>::IID {
-            Some(this)
-        } else {
-            <Miniport as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
-        }
+    impl_query_interface! {
+        Self,
+        this,
+        riid,
+        [IMiniport],
+        fallback = IUnknownVtbl
     }
 }
 
@@ -68,12 +66,12 @@ impl ComImpl<IMiniportWaveRTVtbl> for Miniport {
         new_stream: shim_IMiniportWaveRT_new_stream::<Miniport>,
     };
 
-    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
-        if *riid == <IMiniportWaveRTInterface as ComInterfaceInfo>::IID {
-            Some(this)
-        } else {
-            <Miniport as ComImpl<IMiniportVtbl>>::query_interface(self, this, riid)
-        }
+    impl_query_interface! {
+        Self,
+        this,
+        riid,
+        [IMiniportWaveRT],
+        fallback = IMiniportVtbl
     }
 }
 

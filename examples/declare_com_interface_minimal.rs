@@ -1,8 +1,8 @@
 use core::ffi::c_void;
 
 use kcom::{
-    declare_com_interface, impl_com_object, ComImpl, ComInterfaceInfo, ComObject, GUID, IUnknownVtbl,
-    NTSTATUS, STATUS_SUCCESS,
+    declare_com_interface, impl_com_object, impl_query_interface, ComImpl, ComObject, ComRc, GUID,
+    IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
 };
 
 declare_com_interface! {
@@ -19,6 +19,14 @@ declare_com_interface! {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_snake_case)]
+pub struct IFooRaw {
+    #[allow(non_snake_case)]
+    pub lpVtbl: *mut IFooVtbl,
+}
+
 struct Foo;
 
 impl IFoo for Foo {
@@ -33,12 +41,12 @@ impl ComImpl<IFooVtbl> for Foo {
         ping: shim_IFoo_ping::<Foo>,
     };
 
-    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
-        if *riid == <IFooInterface as ComInterfaceInfo>::IID {
-            Some(this)
-        } else {
-            <Foo as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
-        }
+    impl_query_interface! {
+        Self,
+        this,
+        riid,
+        [IFoo],
+        fallback = IUnknownVtbl
     }
 }
 
@@ -46,12 +54,15 @@ impl_com_object!(Foo, IFooVtbl);
 
 fn main() {
     let raw = Foo::new_com(Foo);
+    let foo_ptr = raw as *mut IFooRaw;
+    let com_ref = unsafe { ComRc::from_raw_addref(foo_ptr).unwrap() };
 
     unsafe {
-        let vtbl = *(raw as *mut *const IFooVtbl);
-        let status = ((*vtbl).ping)(raw, 42);
+        let vtbl = (*com_ref.as_ptr()).lpVtbl;
+        let status = ((*vtbl).ping)(com_ref.as_ptr() as *mut c_void, 42);
         assert_eq!(status, STATUS_SUCCESS);
-
-        ComObject::<Foo, IFooVtbl>::shim_release(raw);
     }
+
+    drop(com_ref);
+    unsafe { ComObject::<Foo, IFooVtbl>::shim_release(raw) };
 }

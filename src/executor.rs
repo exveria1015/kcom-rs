@@ -16,10 +16,10 @@ use core::task::{Context, Poll, Waker};
 mod kernel {
     use super::*;
     use wdk_sys::ntddk::{
-        KeInitializeEvent, KeSetEvent, KeWaitForSingleObject, KEVENT, KWAIT_REASON,
-        SynchronizationEvent, _MODE,
+        KeGetCurrentIrql, KeInitializeEvent, KeSetEvent, KeWaitForSingleObject, KEVENT,
+        KWAIT_REASON, SynchronizationEvent, DISPATCH_LEVEL, _MODE,
     };
-    
+
     // SAFETY: KEVENT is thread-safe for synchronization.
     struct KernelEvent(core::cell::UnsafeCell<KEVENT>);
     unsafe impl Send for KernelEvent {}
@@ -63,6 +63,12 @@ mod kernel {
         }
     }
 
+    fn check_irql() {
+        if unsafe { KeGetCurrentIrql() } >= DISPATCH_LEVEL as u8 {
+            panic!("CRITICAL: block_on called at DISPATCH_LEVEL or higher!");
+        }
+    }
+
     /// Execute a Future synchronously in kernel mode.
     ///
     /// # Safety
@@ -70,14 +76,7 @@ mod kernel {
     /// - Do NOT call this at IRQL > APC_LEVEL (e.g. DISPATCH_LEVEL).
     /// - Do NOT call this if the current thread owns resources that might cause a deadlock.
     pub fn block_on<F: Future>(future: F) -> F::Output {
-        // IRQL Check (Debug only)
-        #[cfg(debug_assertions)]
-        unsafe {
-            use wdk_sys::ntddk::{KeGetCurrentIrql, DISPATCH_LEVEL};
-            if KeGetCurrentIrql() >= DISPATCH_LEVEL as u8 {
-                panic!("CRITICAL: block_on called at DISPATCH_LEVEL or higher!");
-            }
-        }
+        check_irql();
 
         let event = KernelEvent::new();
         let waker = Waker::from(event.clone());

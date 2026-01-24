@@ -1,8 +1,6 @@
-use core::ffi::c_void;
-
 use kcom::{
-    declare_com_interface, impl_com_object, ComImpl, ComInterfaceInfo, ComObject, GUID, IUnknownVtbl,
-    NTSTATUS, STATUS_SUCCESS,
+    declare_com_interface, impl_com_object, impl_query_interface, ComImpl, ComObject, GUID,
+    IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
 };
 
 declare_com_interface! {
@@ -37,12 +35,12 @@ impl ComImpl<IResultSampleVtbl> for Worker {
         do_work: shim_IResultSample_do_work::<Worker>,
     };
 
-    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
-        if *riid == <IResultSampleInterface as ComInterfaceInfo>::IID {
-            Some(this)
-        } else {
-            <Worker as ComImpl<IUnknownVtbl>>::query_interface(self, this, riid)
-        }
+    impl_query_interface! {
+        Self,
+        this,
+        riid,
+        [IResultSample],
+        fallback = IUnknownVtbl
     }
 }
 

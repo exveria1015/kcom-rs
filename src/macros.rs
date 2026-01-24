@@ -43,6 +43,44 @@ macro_rules! declare_com_interface {
     };
 }
 
+#[macro_export]
+macro_rules! impl_query_interface {
+    (
+        $ty:ty,
+        $this:ident,
+        $riid:ident,
+        [$($iface:ident $(=> $ptr:expr)?),+ $(,)?],
+        fallback = $fallback:ty $(,)?
+    ) => {
+        #[inline]
+        fn query_interface(
+            &self,
+            $this: *mut core::ffi::c_void,
+            $riid: &$crate::GUID,
+        ) -> Option<*mut core::ffi::c_void> {
+            $crate::paste::paste! {
+                $(
+                    if *$riid == <[<$iface Interface>] as $crate::traits::ComInterfaceInfo>::IID {
+                        return $crate::impl_query_interface!(@return $this $(, $ptr)?);
+                    }
+                )*
+            }
+            <Self as $crate::traits::ComImpl<$fallback>>::query_interface(self, $this, $riid)
+        }
+    };
+    (@return $this:ident, $ptr:expr) => {{
+        let ptr = $ptr as *mut core::ffi::c_void;
+        if ptr.is_null() {
+            None
+        } else {
+            Some(ptr)
+        }
+    }};
+    (@return $this:ident) => {{
+        Some($this)
+    }};
+}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __kcom_define_interface {
@@ -158,7 +196,9 @@ macro_rules! __kcom_define_interface {
                 where
                     T: $crate::ComImpl<[<$trait_name Vtbl>]>,
                 {
-                    let wrapper = $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this);
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
                     let result = $crate::executor::block_on(wrapper.inner.$method_name($($arg_name),*));
                     $crate::__kcom_map_return!($ret_ty, result)
                 }
@@ -208,7 +248,9 @@ macro_rules! __kcom_define_interface {
                 where
                     T: $crate::ComImpl<[<$trait_name Vtbl>]>,
                 {
-                    let wrapper = $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this);
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
             ],
@@ -257,7 +299,9 @@ macro_rules! __kcom_define_interface {
                 where
                     T: $crate::ComImpl<[<$trait_name Vtbl>]>,
                 {
-                    let wrapper = $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this);
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
             ],
@@ -306,7 +350,9 @@ macro_rules! __kcom_define_interface {
                 where
                     T: $crate::ComImpl<[<$trait_name Vtbl>]>,
                 {
-                    let wrapper = $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this);
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
             ],
@@ -355,7 +401,9 @@ macro_rules! __kcom_define_interface {
                 where
                     T: $crate::ComImpl<[<$trait_name Vtbl>]>,
                 {
-                    let wrapper = $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this);
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
                     $crate::__kcom_map_return!($ret_ty, wrapper.inner.$method_name($($arg_name),*))
                 }
             ],
