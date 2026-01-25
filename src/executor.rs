@@ -17,7 +17,7 @@ mod kernel {
     use super::*;
     use wdk_sys::ntddk::{
         KeGetCurrentIrql, KeInitializeEvent, KeSetEvent, KeWaitForSingleObject, KEVENT,
-        KWAIT_REASON, SynchronizationEvent, DISPATCH_LEVEL, _MODE,
+        KWAIT_REASON, SynchronizationEvent, APC_LEVEL, _MODE,
     };
 
     // SAFETY: KEVENT is thread-safe for synchronization.
@@ -64,16 +64,18 @@ mod kernel {
     }
 
     fn check_irql() {
-        if unsafe { KeGetCurrentIrql() } >= DISPATCH_LEVEL as u8 {
-            panic!("CRITICAL: block_on called at DISPATCH_LEVEL or higher!");
-        }
+        let irql = unsafe { KeGetCurrentIrql() };
+        debug_assert!(
+            irql <= APC_LEVEL as u8,
+            "block_on requires IRQL <= APC_LEVEL"
+        );
     }
 
     /// Execute a Future synchronously in kernel mode.
     ///
     /// # Safety
-    /// This function blocks the current thread. 
-    /// - Do NOT call this at IRQL > APC_LEVEL (e.g. DISPATCH_LEVEL).
+    /// This function blocks the current thread.
+    /// - Must be called at IRQL <= APC_LEVEL.
     /// - Do NOT call this if the current thread owns resources that might cause a deadlock.
     pub fn block_on<F: Future>(future: F) -> F::Output {
         check_irql();

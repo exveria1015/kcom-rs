@@ -44,12 +44,17 @@ macro_rules! declare_com_interface {
 }
 
 #[macro_export]
+/// Implements `ComImpl::query_interface` for a single primary interface.
+///
+/// Additional interfaces must provide explicit pointers (tear-offs or aggregated objects).
+/// Returning `this` is only valid when the caller will interpret the vtable at offset 0
+/// as the requested interface.
 macro_rules! impl_query_interface {
     (
         $ty:ty,
         $this:ident,
         $riid:ident,
-        [$($iface:ident $(=> $ptr:expr)?),+ $(,)?],
+        [$primary:ident $(=> $primary_ptr:expr)? $(, $iface:ident => $ptr:expr)* $(,)?],
         fallback = $fallback:ty $(,)?
     ) => {
         #[inline]
@@ -59,9 +64,12 @@ macro_rules! impl_query_interface {
             $riid: &$crate::GUID,
         ) -> Option<*mut core::ffi::c_void> {
             $crate::paste::paste! {
+                if *$riid == <[<$primary Interface>] as $crate::traits::ComInterfaceInfo>::IID {
+                    return $crate::impl_query_interface!(@return $this $(, $primary_ptr)?);
+                }
                 $(
                     if *$riid == <[<$iface Interface>] as $crate::traits::ComInterfaceInfo>::IID {
-                        return $crate::impl_query_interface!(@return $this $(, $ptr)?);
+                        return $crate::impl_query_interface!(@return $this, $ptr);
                     }
                 )*
             }

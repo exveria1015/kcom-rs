@@ -58,14 +58,12 @@ impl ComImpl<IFooVtbl> for Foo {
         ping: shim_IFoo_ping::<Foo>,
     };
 
-    fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void> {
-        kcom::impl_query_interface!(
-            Self,
-            this,
-            riid,
-            [IFoo],
-            fallback = IUnknownVtbl
-        )
+    impl_query_interface! {
+        Self,
+        this,
+        riid,
+        [IFoo],
+        fallback = IUnknownVtbl
     }
 }
 
@@ -83,6 +81,9 @@ fn main() {
     }
 }
 ```
+
+When supporting additional interfaces, return explicit tear-off or aggregated pointers for
+non-primary interfaces so the returned pointer’s vtable matches the requested IID.
 
 ## Usage (async interface)
 

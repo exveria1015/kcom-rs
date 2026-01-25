@@ -12,6 +12,12 @@ use crate::iunknown::IUnknownVtbl;
 /// # Safety
 /// The pointer must be a valid COM interface pointer whose vtable begins with
 /// `IUnknown` methods.
+///
+/// # Thread Safety
+/// This type does not implement `Send` or `Sync` by default because many COM
+/// interfaces are thread-affine. If you use `ComRc` with interfaces that are
+/// explicitly free-threaded in your environment, wrap or newtype it and add a
+/// documented `unsafe impl Send/Sync` for that specific case.
 pub struct ComRc<T: ?Sized> {
     ptr: NonNull<T>,
     _phantom: PhantomData<T>,

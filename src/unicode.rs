@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use alloc::boxed::Box;
 use alloc::string::{FromUtf16Error, String};
 use alloc::vec::Vec;
 use core::fmt;
@@ -22,9 +23,13 @@ impl fmt::Display for UnicodeStringError {
 }
 
 /// An owned UNICODE_STRING backed by a UTF-16 buffer.
+///
+/// The buffer is constructed once, boxed, and never resized.
+/// Mutable accessors are intentionally omitted to keep the backing storage
+/// stable for the lifetime of the UNICODE_STRING.
 pub struct OwnedUnicodeString {
     inner: UNICODE_STRING,
-    buffer: Vec<u16>,
+    buffer: Box<[u16]>,
 }
 
 impl OwnedUnicodeString {
@@ -38,6 +43,7 @@ impl OwnedUnicodeString {
         buffer.push(0);
         let length = (len * 2) as u16;
         let maximum_length = (buffer.len() * 2) as u16;
+        let mut buffer = buffer.into_boxed_slice();
         let inner = UNICODE_STRING {
             Length: length,
             MaximumLength: maximum_length,
@@ -52,18 +58,8 @@ impl OwnedUnicodeString {
     }
 
     #[inline]
-    pub fn as_mut_unicode(&mut self) -> &mut UNICODE_STRING {
-        &mut self.inner
-    }
-
-    #[inline]
     pub fn as_ptr(&self) -> *const UNICODE_STRING {
         &self.inner
-    }
-
-    #[inline]
-    pub fn as_mut_ptr(&mut self) -> *mut UNICODE_STRING {
-        &mut self.inner
     }
 
     #[inline]

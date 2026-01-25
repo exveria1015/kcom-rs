@@ -24,11 +24,14 @@ pub trait ComImpl<I: InterfaceVtable>: Sized + Sync + 'static {
     const VTABLE: &'static I;
 
     /// Checks if this object supports the interface `riid`.
-    /// Returns a *stable COM interface pointer* (typically `this`) if supported.
+    /// Returns a *stable COM interface pointer* if supported.
     ///
-    /// The `ComObject` wrapper handles `IID_IUNKNOWN` automatically. For other interfaces,
-    /// return the same `this` pointer for all supported IIDs to preserve COM identity.
-    /// Avoid allocating or returning transient pointers.
+    /// The returned pointer must reference a vtable matching `riid`.
+    /// Returning `this` is only valid for the primary interface whose vtable
+    /// begins at offset 0 within the object.
+    /// For other interfaces, return explicit tear-offs or aggregated pointers.
+    /// The `ComObject` wrapper performs `AddRef` on returned pointers.
+
     fn query_interface(&self, this: *mut c_void, riid: &GUID) -> Option<*mut c_void>;
 }
 
