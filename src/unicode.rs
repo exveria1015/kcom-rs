@@ -31,7 +31,8 @@ impl OwnedUnicodeString {
     pub fn new(value: &str) -> Result<Self, UnicodeStringError> {
         let mut buffer: Vec<u16> = value.encode_utf16().collect();
         let len = buffer.len();
-        if len > u16::MAX as usize {
+        let max_units = (u16::MAX as usize) / 2;
+        if len + 1 > max_units {
             return Err(UnicodeStringError::TooLong);
         }
         buffer.push(0);
