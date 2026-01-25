@@ -8,7 +8,61 @@ use crate::traits::InterfaceVtable;
 pub type NTSTATUS = i32;
 
 pub const STATUS_SUCCESS: NTSTATUS = 0;
-pub const STATUS_NOINTERFACE: NTSTATUS = 0xC000_02B9u32 as i32;
+pub const STATUS_NOINTERFACE: NTSTATUS = 0xC000_00BBu32 as i32;
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
+pub struct Status(pub NTSTATUS);
+
+impl Status {
+    pub const SUCCESS: Status = Status(STATUS_SUCCESS);
+    pub const NOINTERFACE: Status = Status(STATUS_NOINTERFACE);
+
+    #[inline]
+    pub const fn from_raw(raw: NTSTATUS) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn into_raw(self) -> NTSTATUS {
+        self.0
+    }
+
+    #[inline]
+    pub const fn is_success(self) -> bool {
+        self.0 >= 0
+    }
+
+    #[inline]
+    pub const fn is_error(self) -> bool {
+        self.0 < 0
+    }
+
+    #[inline]
+    pub fn to_result(self) -> Result<(), Status> {
+        if self.is_success() {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+}
+
+impl From<NTSTATUS> for Status {
+    #[inline]
+    fn from(value: NTSTATUS) -> Self {
+        Status(value)
+    }
+}
+
+impl From<Status> for NTSTATUS {
+    #[inline]
+    fn from(value: Status) -> Self {
+        value.0
+    }
+}
+
+pub type StatusResult<T = ()> = Result<T, Status>;
 
 pub trait IntoNtStatus {
     fn into_ntstatus(self) -> NTSTATUS;
@@ -18,6 +72,13 @@ impl IntoNtStatus for NTSTATUS {
     #[inline]
     fn into_ntstatus(self) -> NTSTATUS {
         self
+    }
+}
+
+impl IntoNtStatus for Status {
+    #[inline]
+    fn into_ntstatus(self) -> NTSTATUS {
+        self.0
     }
 }
 

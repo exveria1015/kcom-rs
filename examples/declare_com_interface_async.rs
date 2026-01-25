@@ -46,7 +46,7 @@ mod async_example {
 
     struct AsyncFoo;
 
-    impl IAsyncFoo for AsyncFoo {
+    unsafe impl IAsyncFoo for AsyncFoo {
         fn init(&self, _value: u32) -> Pin<Box<dyn Future<Output = NTSTATUS> + Send + '_>> {
             Box::pin(YieldOnce {
                 value: STATUS_SUCCESS,

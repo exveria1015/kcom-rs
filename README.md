@@ -123,7 +123,8 @@ Without sugar, you must return a boxed future:
 use core::future::Future;
 use core::pin::Pin;
 
-impl IMyDriver for MyDriver {
+// Async interfaces are `unsafe` to implement because they use a blocking executor.
+unsafe impl IMyDriver for MyDriver {
     fn init(&self) -> Pin<Box<dyn Future<Output = NTSTATUS> + Send + '_>> {
         Box::pin(async move { STATUS_SUCCESS })
     }
@@ -136,7 +137,7 @@ With `async-impl` enabled, use `#[kcom::async_impl]` (powered by `async-trait`):
 use kcom::async_impl;
 
 #[async_impl]
-impl IMyDriver for MyDriver {
+unsafe impl IMyDriver for MyDriver {
     async fn init(&self) -> NTSTATUS {
         STATUS_SUCCESS
     }
@@ -149,6 +150,9 @@ Async COM shims block the calling thread while polling the future. Avoid awaitin
 COM calls on the same thread (deadlock risk). Design async methods to complete without needing
 the caller thread to pump messages.
 
+In kernel mode, the blocking executor is `unsafe` to call. You must uphold IRQL and deadlock
+requirements (see below).
+
 ## Kernel safety notes
 
 The blocking executor waits in kernel mode. For safe usage:
@@ -156,6 +160,7 @@ The blocking executor waits in kernel mode. For safe usage:
 1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher is rejected (always enforced)
 2. **Watchdog**: debug-only timeout detects deadlocks
 3. **Stack safety**: wakers use heap-owned events (`Arc`) and futures are heap-pinned via `Box::pin`
+4. **Deadlock safety**: do not call while holding spinlocks or resources needed by the future
 
 Each async call allocates a boxed future. This is suitable for control paths (init, create, etc.).
 Real-time / hot paths may require allocation-free designs.
@@ -172,6 +177,21 @@ let com_ref = unsafe { ComRc::from_raw_addref(raw).unwrap() };
 let raw_again = com_ref.as_ptr();
 ```
 
+## Aggregation (non-delegating IUnknown)
+
+`ComObject::new_aggregated` returns a **non-delegating IUnknown** pointer for use by the outer
+object. The outer object owns the lifetime of the inner object through this pointer.
+
+Calls made through interfaces returned by `QueryInterface` are **delegated** to the outer
+unknown, while the non-delegating pointer manages the inner refcount directly.
+
+```rust
+use kcom::{ComObject, IUnknownVtbl};
+
+// SAFETY: outer_unknown must be a valid IUnknown vtable from the outer object.
+let non_delegating = ComObject::<Inner, IUnknownVtbl>::new_aggregated(inner, outer_unknown);
+```
+
 ## Unicode helpers (kernel)
 
 Enable the `kernel-unicode` feature to construct and read `UNICODE_STRING` values.
@@ -181,6 +201,15 @@ use kcom::OwnedUnicodeString;
 
 let name = OwnedUnicodeString::new("\\Device\\MyDriver").unwrap();
 let unicode = name.as_unicode();
+```
+
+Compile-time `UNICODE_STRING` literals can be built with `kstr!`:
+
+```rust
+use kcom::kstr;
+
+let name = kstr!("\\Device\\MyDriver");
+// name: &'static UNICODE_STRING
 ```
 
 ## License

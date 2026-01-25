@@ -72,6 +72,15 @@ impl<T: ComInterface> ComRc<T> {
     }
 }
 
+impl<T: ComInterface> core::ops::Deref for ComRc<T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.ptr.as_ref() }
+    }
+}
+
 impl<T: ComInterface> Clone for ComRc<T> {
     fn clone(&self) -> Self {
         unsafe { add_ref(self.ptr.as_ptr()) };

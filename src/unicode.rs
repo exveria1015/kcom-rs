@@ -22,6 +22,25 @@ impl fmt::Display for UnicodeStringError {
     }
 }
 
+#[macro_export]
+/// Returns a reference to a compile-time `UNICODE_STRING` built from a string literal.
+///
+/// The backing buffer is UTF-16 with a trailing NUL. The returned `UNICODE_STRING`
+/// references static storage and is safe to share across threads.
+///
+/// Requires the `kernel-unicode` feature.
+macro_rules! kstr {
+    ($lit:literal) => {{
+        const BUF: &[u16] = &$crate::utf16_lit::utf16_null!($lit);
+        static UNICODE: $crate::UNICODE_STRING = $crate::UNICODE_STRING {
+            Length: ((BUF.len() - 1) * 2) as u16,
+            MaximumLength: (BUF.len() * 2) as u16,
+            Buffer: BUF.as_ptr() as *mut u16,
+        };
+        &UNICODE
+    }};
+}
+
 /// An owned UNICODE_STRING backed by a UTF-16 buffer.
 ///
 /// The buffer is constructed once, boxed, and never resized.
@@ -106,5 +125,21 @@ mod tests {
         let value: String = std::iter::repeat('a').take(32_767).collect();
         let err = OwnedUnicodeString::new(&value).unwrap_err();
         assert_eq!(err, UnicodeStringError::TooLong);
+    }
+
+    #[test]
+    fn kstr_macro_builds_unicode_string() {
+        let unicode = kstr!("Test");
+        assert_eq!(unicode.Length, 8);
+        assert_eq!(unicode.MaximumLength, 10);
+
+        let expected: Vec<u16> = "Test".encode_utf16().collect();
+        let slice = unsafe { unicode_string_as_slice(unicode) };
+        assert_eq!(slice, expected.as_slice());
+
+        let len = (unicode.Length / 2) as usize;
+        unsafe {
+            assert_eq!(*unicode.Buffer.add(len), 0);
+        }
     }
 }

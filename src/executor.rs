@@ -65,19 +65,24 @@ mod kernel {
 
     fn check_irql() {
         let irql = unsafe { KeGetCurrentIrql() };
-        debug_assert!(
-            irql <= APC_LEVEL as u8,
-            "block_on requires IRQL <= APC_LEVEL"
-        );
+        if irql > APC_LEVEL as u8 {
+            panic!(
+                "block_on called at IRQL {} > APC_LEVEL. System deadlock risk.",
+                irql
+            );
+        }
     }
 
     /// Execute a Future synchronously in kernel mode.
     ///
     /// # Safety
     /// This function blocks the current thread.
-    /// - Must be called at IRQL <= APC_LEVEL.
-    /// - Do NOT call this if the current thread owns resources that might cause a deadlock.
-    pub fn block_on<F: Future>(future: F) -> F::Output {
+    /// - **IRQL Requirement**: Must be called at IRQL <= APC_LEVEL.
+    /// - **Deadlock Risk**: Do NOT call this if the current thread owns resources (spinlocks,
+    ///   mutexes, etc.) needed by the future.
+    /// - **Stack Usage**: Async tasks may consume significant kernel stack space; ensure
+    ///   sufficient stack is available.
+    pub unsafe fn block_on<F: Future>(future: F) -> F::Output {
         check_irql();
 
         let event = KernelEvent::new();
@@ -134,7 +139,13 @@ mod host {
         }
     }
 
-    pub fn block_on<F: Future>(future: F) -> F::Output {
+    /// Execute a Future synchronously in host mode.
+    ///
+    /// # Safety
+    /// This function blocks the current thread.
+    /// - Do NOT call this if the current thread owns resources that might cause a deadlock.
+    /// - Async tasks can consume significant stack space; ensure sufficient stack is available.
+    pub unsafe fn block_on<F: Future>(future: F) -> F::Output {
         let signal = Arc::new(HostSignal(AtomicU32::new(PENDING)));
         let waker = Waker::from(signal.clone());
         let mut cx = Context::from_waker(&waker);

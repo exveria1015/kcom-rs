@@ -12,6 +12,7 @@ extern crate std;
 pub mod iunknown;
 #[cfg(feature = "async-com")]
 pub mod executor;
+pub mod descriptors;
 pub mod macros;
 pub mod smart_ptr;
 #[cfg(feature = "kernel-unicode")]
@@ -19,10 +20,15 @@ pub mod unicode;
 pub mod traits;
 pub mod wrapper;
 
-pub use iunknown::{GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, STATUS_NOINTERFACE, STATUS_SUCCESS};
+pub use iunknown::{
+    GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, STATUS_NOINTERFACE, STATUS_SUCCESS, Status,
+    StatusResult,
+};
 pub use paste;
 #[cfg(feature = "async-impl")]
 pub use async_trait::async_trait as async_impl;
+#[cfg(feature = "kernel-unicode")]
+pub use utf16_lit;
 pub use traits::{ComImpl, ComInterfaceInfo, InterfaceVtable, IUnknown, IUnknownInterface};
 pub use smart_ptr::{ComInterface, ComRc};
 #[cfg(feature = "kernel-unicode")]

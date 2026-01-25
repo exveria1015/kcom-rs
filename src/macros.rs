@@ -11,7 +11,7 @@ macro_rules! declare_com_interface {
     (
         $(#[$interface_attr:meta])*
         pub trait $trait_name:ident: IUnknown {
-            const IID: GUID = $guid:expr;
+            const IID: $guid_ty:ty = $guid:expr;
             $($methods:tt)*
         }
     ) => {
@@ -30,7 +30,7 @@ macro_rules! declare_com_interface {
     (
         $(#[$interface_attr:meta])*
         pub trait $trait_name:ident: $parent_trait:ident {
-            const IID: GUID = $guid:expr;
+            const IID: $guid_ty:ty = $guid:expr;
             $($methods:tt)*
         }
     ) => {
@@ -112,6 +112,8 @@ macro_rules! __kcom_define_interface {
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
+            trait_docs [],
+            trait_safety [],
             trait_methods [],
             vtable_fields [],
             shim_funcs [],
@@ -126,13 +128,16 @@ macro_rules! __kcom_define_interface {
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
+        trait_docs [$($trait_docs:tt)*],
+        trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
         ;
     ) => {
         $($attrs)*
-        pub trait $trait_name: $parent_trait + Sync {
+        $($trait_docs)*
+        pub $($trait_safety)* trait $trait_name: $parent_trait + Sync {
             const IID: $crate::GUID = $guid;
             $($trait_methods)*
         }
@@ -174,6 +179,8 @@ macro_rules! __kcom_define_interface {
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
+        trait_docs [$($trait_docs:tt)*],
+        trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
@@ -187,6 +194,12 @@ macro_rules! __kcom_define_interface {
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
+            trait_docs [
+                #[doc = "Async interfaces are unsafe to implement because the generated COM shims use a blocking executor."]
+                #[doc = "Implementors must uphold block_on safety requirements (IRQL <= APC_LEVEL in kernel mode,"]
+                #[doc = "avoid deadlocks, and ensure sufficient stack space)."]
+            ],
+            trait_safety [unsafe],
             trait_methods [
                 $($trait_methods)*
                 $(#[$method_attr])*
@@ -221,7 +234,10 @@ macro_rules! __kcom_define_interface {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
                     };
-                    let result = $crate::executor::block_on(wrapper.inner.$method_name($($arg_name),*));
+                    // SAFETY: caller of the shim must uphold block_on's safety requirements.
+                    let result = unsafe {
+                        $crate::executor::block_on(wrapper.inner.$method_name($($arg_name),*))
+                    };
                     $crate::__kcom_map_return!($ret_ty, result)
                 }
             ],
@@ -236,6 +252,8 @@ macro_rules! __kcom_define_interface {
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
+        trait_docs [$($trait_docs:tt)*],
+        trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
@@ -249,6 +267,8 @@ macro_rules! __kcom_define_interface {
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
+            trait_docs [$($trait_docs)*],
+            trait_safety [$($trait_safety)*],
             trait_methods [
                 $($trait_methods)*
                 $(#[$method_attr])* fn $method_name(&self $(, $arg_name : $arg_ty)*) -> Result<$ok, $err>;
@@ -287,6 +307,8 @@ macro_rules! __kcom_define_interface {
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
+        trait_docs [$($trait_docs:tt)*],
+        trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
@@ -300,6 +322,8 @@ macro_rules! __kcom_define_interface {
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
+            trait_docs [$($trait_docs)*],
+            trait_safety [$($trait_safety)*],
             trait_methods [
                 $($trait_methods)*
                 $(#[$method_attr])* fn $method_name(&self $(, $arg_name : $arg_ty)*) -> ::core::result::Result<$ok, $err>;
@@ -338,6 +362,8 @@ macro_rules! __kcom_define_interface {
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
+        trait_docs [$($trait_docs:tt)*],
+        trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
@@ -351,6 +377,8 @@ macro_rules! __kcom_define_interface {
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
+            trait_docs [$($trait_docs)*],
+            trait_safety [$($trait_safety)*],
             trait_methods [
                 $($trait_methods)*
                 $(#[$method_attr])* fn $method_name(&self $(, $arg_name : $arg_ty)*) -> ::std::result::Result<$ok, $err>;
@@ -389,6 +417,8 @@ macro_rules! __kcom_define_interface {
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
+        trait_docs [$($trait_docs:tt)*],
+        trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
@@ -402,6 +432,8 @@ macro_rules! __kcom_define_interface {
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
+            trait_docs [$($trait_docs)*],
+            trait_safety [$($trait_safety)*],
             trait_methods [
                 $($trait_methods)*
                 $(#[$method_attr])* fn $method_name(&self $(, $arg_name : $arg_ty)*) -> $ret_ty;

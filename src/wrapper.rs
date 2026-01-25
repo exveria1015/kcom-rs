@@ -9,12 +9,23 @@ use crate::iunknown::{GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, STATUS_NOINTER
 use crate::traits::{ComImpl, InterfaceVtable};
 
 #[repr(C)]
+struct NonDelegatingIUnknown<T, I>
+where
+    T: ComImpl<I>,
+    I: InterfaceVtable,
+{
+    vtable: &'static IUnknownVtbl,
+    parent: *mut ComObject<T, I>,
+}
+
+#[repr(C)]
 pub struct ComObject<T, I>
 where
     T: ComImpl<I>,
     I: InterfaceVtable,
 {
     vtable: &'static I,
+    non_delegating_unknown: NonDelegatingIUnknown<T, I>,
     ref_count: AtomicU32,
     outer_unknown: Option<*mut IUnknownVtbl>,
     pub inner: T,
@@ -25,26 +36,64 @@ where
     T: ComImpl<I>,
     I: InterfaceVtable,
 {
+    const NON_DELEGATING_VTABLE: IUnknownVtbl = IUnknownVtbl {
+        QueryInterface: Self::shim_non_delegating_query_interface,
+        AddRef: Self::shim_non_delegating_add_ref,
+        Release: Self::shim_non_delegating_release,
+    };
+
+    #[inline]
+    fn init_non_delegating_ptr(ptr: *mut Self) {
+        unsafe {
+            (*ptr).non_delegating_unknown.parent = ptr;
+        }
+    }
+
+    #[inline]
+    fn non_delegating_ptr(ptr: *mut Self) -> *mut c_void {
+        unsafe { &mut (*ptr).non_delegating_unknown as *mut _ as *mut c_void }
+    }
+
     #[inline]
     pub fn new(inner: T) -> *mut c_void {
         let obj = Box::new(Self {
             vtable: T::VTABLE,
+            non_delegating_unknown: NonDelegatingIUnknown {
+                vtable: &Self::NON_DELEGATING_VTABLE,
+                parent: core::ptr::null_mut(),
+            },
             ref_count: AtomicU32::new(1),
             outer_unknown: None,
             inner,
         });
-        Box::into_raw(obj) as *mut c_void
+        let ptr = Box::into_raw(obj);
+        Self::init_non_delegating_ptr(ptr);
+        ptr as *mut c_void
     }
 
+    /// Creates an aggregated COM object and returns the **non-delegating IUnknown** pointer.
+    ///
+    /// The outer object should hold this pointer to manage the inner object's lifetime.
+    /// Interfaces returned via `QueryInterface` will delegate IUnknown calls to the outer
+    /// unknown, while this non-delegating pointer updates the inner refcount directly.
+    ///
+    /// # Safety
+    /// `outer_unknown` must point to a valid outer IUnknown vtable.
     #[inline]
     pub fn new_aggregated(inner: T, outer_unknown: *mut IUnknownVtbl) -> *mut c_void {
         let obj = Box::new(Self {
             vtable: T::VTABLE,
+            non_delegating_unknown: NonDelegatingIUnknown {
+                vtable: &Self::NON_DELEGATING_VTABLE,
+                parent: core::ptr::null_mut(),
+            },
             ref_count: AtomicU32::new(1),
             outer_unknown: Some(outer_unknown),
             inner,
         });
-        Box::into_raw(obj) as *mut c_void
+        let ptr = Box::into_raw(obj);
+        Self::init_non_delegating_ptr(ptr);
+        Self::non_delegating_ptr(ptr)
     }
 
     #[inline(always)]
@@ -53,6 +102,14 @@ where
     /// The pointer must be properly aligned and remain valid for the returned lifetime.
     pub unsafe fn from_ptr<'a>(ptr: *mut c_void) -> &'a Self {
         unsafe { &*(ptr as *const Self) }
+    }
+
+    #[inline(always)]
+    /// # Safety
+    /// `ptr` must be a valid pointer to a non-delegating IUnknown created by this crate.
+    pub unsafe fn from_non_delegating<'a>(ptr: *mut c_void) -> &'a Self {
+        let unknown = unsafe { &*(ptr as *const NonDelegatingIUnknown<T, I>) };
+        unsafe { &*unknown.parent }
     }
 
     #[allow(non_snake_case)]
@@ -127,6 +184,66 @@ where
         unsafe { *ppv = core::ptr::null_mut() };
         STATUS_NOINTERFACE
     }
+
+    #[allow(non_snake_case)]
+    /// # Safety
+    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
+    pub unsafe extern "system" fn shim_non_delegating_add_ref(this: *mut c_void) -> u32 {
+        let wrapper = unsafe { Self::from_non_delegating(this) };
+        wrapper.ref_count.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    #[allow(non_snake_case)]
+    /// # Safety
+    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
+    pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
+        let wrapper = unsafe { Self::from_non_delegating(this) };
+        let count = wrapper.ref_count.fetch_sub(1, Ordering::Release) - 1;
+
+        if count == 0 {
+            core::sync::atomic::fence(Ordering::Acquire);
+            unsafe {
+                let _ = Box::from_raw(wrapper as *const Self as *mut Self);
+            }
+        }
+
+        count
+    }
+
+    #[allow(non_snake_case)]
+    /// # Safety
+    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
+    /// `riid` and `ppv` must be valid, non-null pointers.
+    pub unsafe extern "system" fn shim_non_delegating_query_interface(
+        this: *mut c_void,
+        riid: *const GUID,
+        ppv: *mut *mut c_void,
+    ) -> NTSTATUS {
+        let wrapper = unsafe { Self::from_non_delegating(this) };
+
+        if ppv.is_null() || riid.is_null() {
+            return STATUS_NOINTERFACE;
+        }
+
+        let riid = unsafe { &*riid };
+
+        if *riid == IID_IUNKNOWN {
+            unsafe { Self::shim_non_delegating_add_ref(this) };
+            unsafe { *ppv = this };
+            return STATUS_SUCCESS;
+        }
+
+        let delegating_ptr = wrapper as *const Self as *mut c_void;
+
+        if let Some(ptr) = wrapper.inner.query_interface(delegating_ptr, riid) {
+            unsafe { ((*(ptr as *mut IUnknownVtbl)).AddRef)(ptr) };
+            unsafe { *ppv = ptr };
+            return STATUS_SUCCESS;
+        }
+
+        unsafe { *ppv = core::ptr::null_mut() };
+        STATUS_NOINTERFACE
+    }
 }
 
 #[cfg(test)]
@@ -136,6 +253,35 @@ mod tests {
     use core::sync::atomic::{AtomicU32, Ordering};
 
     static DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+    static OUTER_ADDREF_COUNT: AtomicU32 = AtomicU32::new(0);
+    static OUTER_RELEASE_COUNT: AtomicU32 = AtomicU32::new(0);
+    static OUTER_QUERY_COUNT: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "system" fn outer_add_ref(_this: *mut core::ffi::c_void) -> u32 {
+        OUTER_ADDREF_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    unsafe extern "system" fn outer_release(_this: *mut core::ffi::c_void) -> u32 {
+        OUTER_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    unsafe extern "system" fn outer_query_interface(
+        _this: *mut core::ffi::c_void,
+        _riid: *const GUID,
+        ppv: *mut *mut core::ffi::c_void,
+    ) -> NTSTATUS {
+        OUTER_QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+        if !ppv.is_null() {
+            unsafe { *ppv = core::ptr::null_mut() };
+        }
+        STATUS_NOINTERFACE
+    }
+
+    static OUTER_VTBL: IUnknownVtbl = IUnknownVtbl {
+        QueryInterface: outer_query_interface,
+        AddRef: outer_add_ref,
+        Release: outer_release,
+    };
 
     struct Dummy;
 
@@ -181,6 +327,54 @@ mod tests {
         unsafe {
             assert_eq!(ComObject::<Dummy, IUnknownVtbl>::shim_release(ptr), 1);
             assert_eq!(ComObject::<Dummy, IUnknownVtbl>::shim_release(ptr), 0);
+        }
+
+        assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn aggregated_non_delegating_and_delegating_paths() {
+        DROP_COUNT.store(0, Ordering::Relaxed);
+        OUTER_ADDREF_COUNT.store(0, Ordering::Relaxed);
+        OUTER_RELEASE_COUNT.store(0, Ordering::Relaxed);
+        OUTER_QUERY_COUNT.store(0, Ordering::Relaxed);
+
+        let ptr = ComObject::<Dummy, IUnknownVtbl>::new_aggregated(
+            Dummy,
+            &OUTER_VTBL as *const _ as *mut _,
+        );
+
+        unsafe {
+            let vtbl = *(ptr as *mut *mut IUnknownVtbl);
+            assert_eq!(((*vtbl).AddRef)(ptr), 2);
+            assert_eq!(((*vtbl).Release)(ptr), 1);
+        }
+
+        assert_eq!(OUTER_ADDREF_COUNT.load(Ordering::Relaxed), 0);
+        assert_eq!(OUTER_RELEASE_COUNT.load(Ordering::Relaxed), 0);
+
+        let delegating_ptr = unsafe {
+            ComObject::<Dummy, IUnknownVtbl>::from_non_delegating(ptr) as *const _
+                as *mut core::ffi::c_void
+        };
+
+        unsafe {
+            assert_eq!(
+                ComObject::<Dummy, IUnknownVtbl>::shim_add_ref(delegating_ptr),
+                1
+            );
+            assert_eq!(
+                ComObject::<Dummy, IUnknownVtbl>::shim_release(delegating_ptr),
+                1
+            );
+        }
+
+        assert_eq!(OUTER_ADDREF_COUNT.load(Ordering::Relaxed), 1);
+        assert_eq!(OUTER_RELEASE_COUNT.load(Ordering::Relaxed), 1);
+
+        unsafe {
+            let vtbl = *(ptr as *mut *mut IUnknownVtbl);
+            assert_eq!(((*vtbl).Release)(ptr), 0);
         }
 
         assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
