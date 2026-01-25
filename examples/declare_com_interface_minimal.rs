@@ -19,14 +19,6 @@ declare_com_interface! {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-#[allow(non_snake_case)]
-pub struct IFooRaw {
-    #[allow(non_snake_case)]
-    pub lpVtbl: *mut IFooVtbl,
-}
-
 struct Foo;
 
 impl IFoo for Foo {

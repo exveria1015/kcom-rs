@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 #[macro_export]
+/// Declares a COM interface trait and generates its vtable definition.
+///
+/// When using `ComRc`, define a raw COM pointer struct (e.g., `IFooRaw` with an
+/// `lpVtbl` field) and add `unsafe impl ComInterface for IFooRaw` to satisfy the
+/// layout contract.
 macro_rules! declare_com_interface {
     (
         $(#[$interface_attr:meta])*
@@ -140,6 +145,15 @@ macro_rules! __kcom_define_interface {
                 pub parent: $($parent_vtable)+,
                 $($vtable_fields)*
             }
+
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            #[allow(non_snake_case)]
+            pub struct [<$trait_name Raw>] {
+                pub lpVtbl: *mut [<$trait_name Vtbl>],
+            }
+
+            unsafe impl $crate::ComInterface for [<$trait_name Raw>] {}
 
             unsafe impl $crate::traits::InterfaceVtable for [<$trait_name Vtbl>] {}
 
