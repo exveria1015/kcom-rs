@@ -23,6 +23,59 @@ macro_rules! pcpin_descriptor {
     };
 }
 
+/// Builds a `KSIDENTIFIER` value (used by `KSPIN_INTERFACE`/`KSPIN_MEDIUM`).
+///
+/// Expects `KSIDENTIFIER`, `KSIDENTIFIER__bindgen_ty_1`, and
+/// `KSIDENTIFIER__bindgen_ty_1__bindgen_ty_1` to be in scope.
+#[macro_export]
+macro_rules! ksidentifier {
+    (
+        set: $set:expr,
+        id: $id:expr,
+        flags: $flags:expr $(,)?
+    ) => {
+        KSIDENTIFIER {
+            __bindgen_anon_1: KSIDENTIFIER__bindgen_ty_1 {
+                __bindgen_anon_1: KSIDENTIFIER__bindgen_ty_1__bindgen_ty_1 {
+                    Set: $set,
+                    Id: $id,
+                    Flags: $flags,
+                },
+            },
+        }
+    };
+}
+
+/// Builds a `KSPIN_INTERFACE` value.
+///
+/// Expects `KSPIN_INTERFACE` aliases `KSIDENTIFIER` and the `ksidentifier!`
+/// macro to be in scope.
+#[macro_export]
+macro_rules! kspin_interface {
+    (
+        set: $set:expr,
+        id: $id:expr,
+        flags: $flags:expr $(,)?
+    ) => {
+        $crate::ksidentifier!(set: $set, id: $id, flags: $flags)
+    };
+}
+
+/// Builds a `KSPIN_MEDIUM` value.
+///
+/// Expects `KSPIN_MEDIUM` aliases `KSIDENTIFIER` and the `ksidentifier!`
+/// macro to be in scope.
+#[macro_export]
+macro_rules! kspin_medium {
+    (
+        set: $set:expr,
+        id: $id:expr,
+        flags: $flags:expr $(,)?
+    ) => {
+        $crate::ksidentifier!(set: $set, id: $id, flags: $flags)
+    };
+}
+
 /// Builds a `PCPROPERTY_ITEM` value.
 ///
 /// Expects `PCPROPERTY_ITEM` and `PCPFNPROPERTY_HANDLER` types to be in scope.
