@@ -92,3 +92,23 @@ pub unsafe fn unicode_string_to_string(unicode: &UNICODE_STRING) -> Result<Strin
     let slice = unsafe { unicode_string_as_slice(unicode) };
     String::from_utf16(slice)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_string_allows_max_len_minus_one() {
+        let value: String = std::iter::repeat('a').take(32_766).collect();
+        let owned = OwnedUnicodeString::new(&value).expect("expected string to fit");
+        assert_eq!(owned.as_unicode().Length, (32_766 * 2) as u16);
+        assert_eq!(owned.as_unicode().MaximumLength, ((32_766 + 1) * 2) as u16);
+    }
+
+    #[test]
+    fn unicode_string_rejects_overflow() {
+        let value: String = std::iter::repeat('a').take(32_767).collect();
+        let err = OwnedUnicodeString::new(&value).unwrap_err();
+        assert_eq!(err, UnicodeStringError::TooLong);
+    }
+}
