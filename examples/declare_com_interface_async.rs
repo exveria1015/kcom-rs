@@ -7,8 +7,8 @@ mod async_example {
     use std::boxed::Box;
 
     use kcom::{
-        declare_com_interface, impl_com_object, impl_query_interface, ComImpl, ComObject, GUID,
-        IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
+        declare_com_interface, impl_com_interface, impl_com_object, ComObject, GUID, IUnknownVtbl,
+        NTSTATUS, STATUS_SUCCESS,
     };
 
     declare_com_interface! {
@@ -55,18 +55,10 @@ mod async_example {
         }
     }
 
-    impl ComImpl<IAsyncFooVtbl> for AsyncFoo {
-        const VTABLE: &'static IAsyncFooVtbl = &IAsyncFooVtbl {
-            parent: *<AsyncFoo as ComImpl<IUnknownVtbl>>::VTABLE,
-            init: shim_IAsyncFoo_init::<AsyncFoo>,
-        };
-
-        impl_query_interface! {
-            Self,
-            this,
-            riid,
-            [IAsyncFoo],
-            fallback = IUnknownVtbl
+    impl_com_interface! {
+        impl AsyncFoo: IAsyncFoo {
+            parent = IUnknownVtbl,
+            methods = [init],
         }
     }
 

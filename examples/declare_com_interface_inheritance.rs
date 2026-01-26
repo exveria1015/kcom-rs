@@ -1,6 +1,6 @@
 use kcom::{
-    declare_com_interface, impl_com_object, impl_query_interface, ComImpl, ComObject, GUID,
-    IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
+    declare_com_interface, impl_com_interface, impl_com_object, ComObject, GUID, IUnknownVtbl,
+    NTSTATUS, STATUS_SUCCESS,
 };
 
 declare_com_interface! {
@@ -45,33 +45,18 @@ impl IMiniportWaveRT for Miniport {
     }
 }
 
-impl ComImpl<IMiniportVtbl> for Miniport {
-    const VTABLE: &'static IMiniportVtbl = &IMiniportVtbl {
-        parent: *<Miniport as ComImpl<IUnknownVtbl>>::VTABLE,
-        init: shim_IMiniport_init::<Miniport>,
-    };
-
-    impl_query_interface! {
-        Self,
-        this,
-        riid,
-        [IMiniport],
-        fallback = IUnknownVtbl
+impl_com_interface! {
+    impl Miniport: IMiniport {
+        parent = IUnknownVtbl,
+        methods = [init],
     }
 }
 
-impl ComImpl<IMiniportWaveRTVtbl> for Miniport {
-    const VTABLE: &'static IMiniportWaveRTVtbl = &IMiniportWaveRTVtbl {
-        parent: *<Miniport as ComImpl<IMiniportVtbl>>::VTABLE,
-        new_stream: shim_IMiniportWaveRT_new_stream::<Miniport>,
-    };
-
-    impl_query_interface! {
-        Self,
-        this,
-        riid,
-        [IMiniportWaveRT],
-        fallback = IMiniportVtbl
+impl_com_interface! {
+    impl Miniport: IMiniportWaveRT {
+        parent = IMiniportVtbl,
+        methods = [new_stream],
+        qi = [IMiniportWaveRT, IMiniport => this],
     }
 }
 

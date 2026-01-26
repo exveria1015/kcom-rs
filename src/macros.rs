@@ -81,6 +81,9 @@ macro_rules! impl_query_interface {
             <Self as $crate::traits::ComImpl<$fallback>>::query_interface(self, $this, $riid)
         }
     };
+    (@return $this:ident, this) => {{
+        Some($this)
+    }};
     (@return $this:ident, $ptr:expr) => {{
         let ptr = $ptr as *mut core::ffi::c_void;
         if ptr.is_null() {
@@ -92,6 +95,121 @@ macro_rules! impl_query_interface {
     (@return $this:ident) => {{
         Some($this)
     }};
+}
+
+#[macro_export]
+/// Implements `ComImpl` and builds the VTABLE for a declared COM interface.
+///
+/// Defaults to using the primary interface for `QueryInterface` and the parent
+/// vtable type as the fallback.
+macro_rules! impl_com_interface {
+    (
+        impl $ty:ty: $trait_name:ident {
+            parent = $parent_vtbl:ty,
+            methods = [$($method:ident),* $(,)?],
+            this = $this:ident,
+            qi = [$($qi:tt)+],
+            $(fallback = $fallback:ty,)?
+        }
+    ) => {
+        $crate::impl_com_interface!(
+            @impl
+            $ty,
+            $trait_name,
+            $parent_vtbl,
+            [$($method),*],
+            [$($qi)+],
+            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
+            $this
+        );
+    };
+    (
+        impl $ty:ty: $trait_name:ident {
+            parent = $parent_vtbl:ty,
+            methods = [$($method:ident),* $(,)?],
+            qi = [$($qi:tt)+],
+            $(fallback = $fallback:ty,)?
+        }
+    ) => {
+        $crate::impl_com_interface!(
+            @impl
+            $ty,
+            $trait_name,
+            $parent_vtbl,
+            [$($method),*],
+            [$($qi)+],
+            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
+            this
+        );
+    };
+    (
+        impl $ty:ty: $trait_name:ident {
+            parent = $parent_vtbl:ty,
+            methods = [$($method:ident),* $(,)?],
+            $(fallback = $fallback:ty,)?
+        }
+    ) => {
+        $crate::impl_com_interface!(
+            @impl
+            $ty,
+            $trait_name,
+            $parent_vtbl,
+            [$($method),*],
+            [$trait_name],
+            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
+            this
+        );
+    };
+    (@fallback $parent_vtbl:ty) => { $parent_vtbl };
+    (@fallback $parent_vtbl:ty, $fallback:ty) => { $fallback };
+    (@parent IUnknownVtbl, $ty:ty, $trait_name:ident) => {{
+        $crate::paste::paste! {
+            $crate::IUnknownVtbl {
+                QueryInterface: $crate::wrapper::ComObject::<$ty, [<$trait_name Vtbl>]>::shim_query_interface,
+                AddRef: $crate::wrapper::ComObject::<$ty, [<$trait_name Vtbl>]>::shim_add_ref,
+                Release: $crate::wrapper::ComObject::<$ty, [<$trait_name Vtbl>]>::shim_release,
+            }
+        }
+    }};
+    (@parent $parent_vtbl:ty, $ty:ty, $trait_name:ident) => {
+        *<$ty as $crate::ComImpl<$parent_vtbl>>::VTABLE
+    };
+    (@impl
+        $ty:ty,
+        $trait_name:ident,
+        $parent_vtbl:ty,
+        [$($method:ident),*],
+        [$($qi:tt)+],
+        $fallback:ty,
+        $this:ident
+    ) => {
+        $crate::paste::paste! {
+            impl $crate::ComImpl<[<$trait_name Vtbl>]> for $ty {
+                const VTABLE: &'static [<$trait_name Vtbl>] = &[<$trait_name Vtbl>] {
+                    parent: $crate::impl_com_interface!(@parent $parent_vtbl, $ty, $trait_name),
+                    $($method: [<shim_ $trait_name _ $method>]::<$ty>,)*
+                };
+
+                $crate::impl_query_interface! {
+                    Self,
+                    $this,
+                    riid,
+                    [$($qi)+],
+                    fallback = $fallback
+                }
+            }
+        }
+    };
+}
+
+#[macro_export]
+/// Returns early with `Err(status)` when `cond` is false.
+macro_rules! ensure {
+    ($cond:expr, $status:expr $(,)?) => {
+        if !$cond {
+            return Err($status);
+        }
+    };
 }
 
 #[doc(hidden)]
@@ -138,6 +256,7 @@ macro_rules! __kcom_define_interface {
         $($attrs)*
         $($trait_docs)*
         pub $($trait_safety)* trait $trait_name: $parent_trait + Sync {
+            #[allow(dead_code)]
             const IID: $crate::GUID = $guid;
             $($trait_methods)*
         }
@@ -159,6 +278,11 @@ macro_rules! __kcom_define_interface {
             }
 
             unsafe impl $crate::ComInterface for [<$trait_name Raw>] {}
+
+            impl $crate::traits::ComInterfaceInfo for [<$trait_name Raw>] {
+                type Vtable = [<$trait_name Vtbl>];
+                const IID: $crate::GUID = $guid;
+            }
 
             unsafe impl $crate::traits::InterfaceVtable for [<$trait_name Vtbl>] {}
 

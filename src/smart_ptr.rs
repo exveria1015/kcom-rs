@@ -5,7 +5,7 @@ use core::ffi::c_void;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
-use crate::iunknown::IUnknownVtbl;
+use crate::iunknown::{IUnknownVtbl, Status, StatusResult};
 
 /// Marker trait for types that are valid COM interfaces.
 ///
@@ -45,6 +45,19 @@ impl<T: ComInterface> ComRc<T> {
         })
     }
 
+    /// Takes ownership of a raw COM pointer or returns `Status::NOINTERFACE` if null.
+    ///
+    /// # Safety
+    /// `ptr` must be a valid COM interface pointer when non-null.
+    pub unsafe fn from_raw_or_status(ptr: *mut T) -> StatusResult<Self> {
+        NonNull::new(ptr)
+            .map(|ptr| Self {
+                ptr,
+                _phantom: PhantomData,
+            })
+            .ok_or(Status::NOINTERFACE)
+    }
+
     /// Takes ownership of a raw COM pointer and calls `AddRef` first.
     ///
     /// # Safety
@@ -69,6 +82,27 @@ impl<T: ComInterface> ComRc<T> {
         let ptr = self.ptr.as_ptr();
         core::mem::forget(self);
         ptr
+    }
+
+    /// Queries for another COM interface and returns a smart pointer on success.
+    pub fn query_interface<U>(&self) -> StatusResult<ComRc<U>>
+    where
+        U: ComInterface + crate::traits::ComInterfaceInfo,
+    {
+        let mut out = core::ptr::null_mut();
+        let vtbl = unsafe { *(self.ptr.as_ptr() as *mut *mut IUnknownVtbl) };
+        let status = unsafe {
+            ((*vtbl).QueryInterface)(
+                self.ptr.as_ptr() as *mut c_void,
+                &U::IID,
+                &mut out,
+            )
+        };
+        let status = Status::from_raw(status);
+        if status.is_error() {
+            return Err(status);
+        }
+        unsafe { ComRc::<U>::from_raw_or_status(out as *mut U) }
     }
 }
 
@@ -110,6 +144,7 @@ unsafe fn release<T: ComInterface>(ptr: *mut T) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{declare_com_interface, impl_com_interface, impl_com_object, GUID, NTSTATUS, STATUS_SUCCESS};
     use crate::wrapper::ComObject;
     use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -177,5 +212,53 @@ mod tests {
         }
 
         assert_eq!(DROP_COUNT.load(Ordering::Relaxed), 1);
+    }
+
+    declare_com_interface! {
+        pub trait IFoo: IUnknown {
+            const IID: GUID = GUID {
+                data1: 0xAA55_AA55,
+                data2: 0x1234,
+                data3: 0x5678,
+                data4: [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80],
+            };
+
+            fn ping(&self) -> NTSTATUS;
+        }
+    }
+
+    impl IFoo for Dummy {
+        fn ping(&self) -> NTSTATUS {
+            STATUS_SUCCESS
+        }
+    }
+
+    impl_com_interface! {
+        impl Dummy: IFoo {
+            parent = IUnknownVtbl,
+            methods = [ping],
+        }
+    }
+
+    impl_com_object!(Dummy, IFooVtbl);
+
+    #[test]
+    fn query_interface_returns_comrc() {
+        let raw = Dummy::new_com(Dummy);
+        let com = unsafe { ComRc::<IFooRaw>::from_raw_addref(raw as *mut IFooRaw).unwrap() };
+
+        let queried = com.query_interface::<IFooRaw>().unwrap();
+        drop(queried);
+        drop(com);
+
+        unsafe {
+            assert_eq!(ComObject::<Dummy, IFooVtbl>::shim_release(raw), 0);
+        }
+    }
+
+    #[test]
+    fn from_raw_or_status_rejects_null() {
+        let err = unsafe { ComRc::<IUnknownRaw>::from_raw_or_status(core::ptr::null_mut()) };
+        assert!(matches!(err, Err(Status::NOINTERFACE)));
     }
 }

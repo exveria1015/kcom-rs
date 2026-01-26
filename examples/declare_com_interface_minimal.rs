@@ -1,7 +1,7 @@
 use core::ffi::c_void;
 
 use kcom::{
-    declare_com_interface, impl_com_object, impl_query_interface, ComImpl, ComObject, ComRc, GUID,
+    declare_com_interface, impl_com_interface, impl_com_object, ComObject, ComRc, GUID,
     IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
 };
 
@@ -27,18 +27,10 @@ impl IFoo for Foo {
     }
 }
 
-impl ComImpl<IFooVtbl> for Foo {
-    const VTABLE: &'static IFooVtbl = &IFooVtbl {
-        parent: *<Foo as ComImpl<IUnknownVtbl>>::VTABLE,
-        ping: shim_IFoo_ping::<Foo>,
-    };
-
-    impl_query_interface! {
-        Self,
-        this,
-        riid,
-        [IFoo],
-        fallback = IUnknownVtbl
+impl_com_interface! {
+    impl Foo: IFoo {
+        parent = IUnknownVtbl,
+        methods = [ping],
     }
 }
 

@@ -176,7 +176,8 @@ where
         }
 
         if let Some(ptr) = wrapper.inner.query_interface(this, riid) {
-            unsafe { ((*(ptr as *mut IUnknownVtbl)).AddRef)(ptr) };
+            let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
+            unsafe { ((*vtbl).AddRef)(ptr) };
             unsafe { *ppv = ptr };
             return STATUS_SUCCESS;
         }
@@ -236,7 +237,8 @@ where
         let delegating_ptr = wrapper as *const Self as *mut c_void;
 
         if let Some(ptr) = wrapper.inner.query_interface(delegating_ptr, riid) {
-            unsafe { ((*(ptr as *mut IUnknownVtbl)).AddRef)(ptr) };
+            let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
+            unsafe { ((*vtbl).AddRef)(ptr) };
             unsafe { *ppv = ptr };
             return STATUS_SUCCESS;
         }

@@ -1,6 +1,6 @@
 use kcom::{
-    declare_com_interface, impl_com_object, impl_query_interface, ComImpl, ComObject, GUID,
-    IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
+    declare_com_interface, impl_com_interface, impl_com_object, ComObject, GUID, IUnknownVtbl,
+    NTSTATUS, STATUS_SUCCESS,
 };
 
 declare_com_interface! {
@@ -29,18 +29,10 @@ impl IResultSample for Worker {
     }
 }
 
-impl ComImpl<IResultSampleVtbl> for Worker {
-    const VTABLE: &'static IResultSampleVtbl = &IResultSampleVtbl {
-        parent: *<Worker as ComImpl<IUnknownVtbl>>::VTABLE,
-        do_work: shim_IResultSample_do_work::<Worker>,
-    };
-
-    impl_query_interface! {
-        Self,
-        this,
-        riid,
-        [IResultSample],
-        fallback = IUnknownVtbl
+impl_com_interface! {
+    impl Worker: IResultSample {
+        parent = IUnknownVtbl,
+        methods = [do_work],
     }
 }
 

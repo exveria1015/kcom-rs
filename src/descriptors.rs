@@ -1,5 +1,29 @@
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
+//!
+//! Descriptor DSL mapping
+//!
+//! This module provides macros that build PortCls descriptor structs. Each
+//! macro maps directly to the underlying C struct fields:
+//!
+//! - `pcpin_descriptor!` -> `PCPIN_DESCRIPTOR`
+//!   - `max_global_instances` -> `MaxGlobalInstanceCount`
+//!   - `max_filter_instances` -> `MaxFilterInstanceCount`
+//!   - `min_filter_instances` -> `MinFilterInstanceCount`
+//!   - `automation` -> `AutomationTable`
+//!   - `kspin` -> `KsPinDescriptor`
+//! - `kspin_descriptor!` -> `KSPIN_DESCRIPTOR`
+//!   - `interfaces`, `mediums`, `data_ranges` -> count + pointer fields
+//!   - `data_ranges` typically uses `KSDATARANGE` entries and can be built
+//!     with `ksdatarange_audio!` for `KSDATARANGE_AUDIO` ranges.
+//! - `ksdataformat!` -> `KSDATAFORMAT`
+//! - `pcautomation_table!` -> `PCAUTOMATION_TABLE`
+//!   - each list produces a count + pointer pair (null when empty)
+//! - `pcnode_descriptor!` -> `PCNODE_DESCRIPTOR`
+//! - `pcconnection_descriptor!` -> `PCCONNECTION_DESCRIPTOR`
+//! - `define_descriptor!` -> `PCFILTER_DESCRIPTOR`
+//!   - arrays are emitted as internal `const` slices; empty lists map to
+//!     null pointers with count fields set to zero.
 
 /// Builds a `PCPIN_DESCRIPTOR` value.
 ///
@@ -19,6 +43,28 @@ macro_rules! pcpin_descriptor {
             MinFilterInstanceCount: $min_filter,
             AutomationTable: $automation,
             KsPinDescriptor: $kspin,
+        }
+    };
+}
+
+/// Builds a `KSDATARANGE_AUDIO` value with RangeInclusive syntax.
+///
+/// Expects `KSDATARANGE_AUDIO` and `KSDATARANGE` to be in scope.
+#[macro_export]
+macro_rules! ksdatarange_audio {
+    (
+        data_range: $data_range:expr,
+        max_channels: $max_channels:expr,
+        bits_per_sample: $min_bits:tt ..= $max_bits:tt,
+        sample_frequency: $min_freq:tt ..= $max_freq:tt $(,)?
+    ) => {
+        KSDATARANGE_AUDIO {
+            DataRange: $data_range,
+            MaximumChannels: $max_channels,
+            MinimumBitsPerSample: ($min_bits),
+            MaximumBitsPerSample: ($max_bits),
+            MinimumSampleFrequency: ($min_freq),
+            MaximumSampleFrequency: ($max_freq),
         }
     };
 }
