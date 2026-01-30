@@ -1,15 +1,18 @@
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use alloc::alloc::handle_alloc_error;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::ManuallyDrop;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::allocator::{Allocator, GlobalAllocator};
-use crate::iunknown::{GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, STATUS_NOINTERFACE, STATUS_SUCCESS};
-use crate::traits::{ComImpl, InterfaceVtable};
+use crate::iunknown::{
+    GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_NOINTERFACE,
+    STATUS_SUCCESS,
+};
+use crate::smart_ptr::{ComInterface, ComRc};
+use crate::traits::{ComImpl, ComInterfaceInfo, InterfaceVtable};
 
 #[repr(C)]
 struct NonDelegatingIUnknown<T, I, A>
@@ -57,18 +60,34 @@ where
         }
     }
 
+    /// Creates a COM object and returns a smart pointer that owns the initial reference.
+    #[inline]
+    pub fn new_rc_in<R>(inner: T, alloc: A) -> Result<ComRc<R>, NTSTATUS>
+    where
+        R: ComInterface + ComInterfaceInfo<Vtable = I>,
+    {
+        Self::try_new_rc_in(inner, alloc).ok_or(STATUS_INSUFFICIENT_RESOURCES)
+    }
+
+    /// Creates a COM object and returns a smart pointer that owns the initial reference.
+    #[inline]
+    pub fn try_new_rc_in<R>(inner: T, alloc: A) -> Option<ComRc<R>>
+    where
+        R: ComInterface + ComInterfaceInfo<Vtable = I>,
+    {
+        let ptr = Self::try_new_in(inner, alloc)?;
+        // SAFETY: `ptr` is a freshly created COM pointer with refcount 1.
+        Some(unsafe { ComRc::from_raw_unchecked(ptr as *mut R) })
+    }
+
     #[inline]
     fn non_delegating_ptr(ptr: *mut Self) -> *mut c_void {
         unsafe { &mut (*ptr).non_delegating_unknown as *mut _ as *mut c_void }
     }
 
     #[inline]
-    pub fn new_in(inner: T, alloc: A) -> *mut c_void {
-        let ptr = match Self::try_new_in(inner, alloc) {
-            Some(ptr) => ptr,
-            None => handle_alloc_error(Self::LAYOUT),
-        };
-        ptr
+    pub fn new_in(inner: T, alloc: A) -> Result<*mut c_void, NTSTATUS> {
+        Self::try_new_in(inner, alloc).ok_or(STATUS_INSUFFICIENT_RESOURCES)
     }
 
     #[inline]
@@ -115,11 +134,9 @@ where
         inner: T,
         outer_unknown: *mut IUnknownVtbl,
         alloc: A,
-    ) -> *mut c_void {
-        match Self::try_new_aggregated_in(inner, outer_unknown, alloc) {
-            Some(ptr) => ptr,
-            None => handle_alloc_error(Self::LAYOUT),
-        }
+    ) -> Result<*mut c_void, NTSTATUS> {
+        Self::try_new_aggregated_in(inner, outer_unknown, alloc)
+            .ok_or(STATUS_INSUFFICIENT_RESOURCES)
     }
 
     #[inline]
@@ -332,7 +349,7 @@ where
     I: InterfaceVtable,
 {
     #[inline]
-    pub fn new(inner: T) -> *mut c_void {
+    pub fn new(inner: T) -> Result<*mut c_void, NTSTATUS> {
         Self::new_in(inner, GlobalAllocator)
     }
 
@@ -341,10 +358,28 @@ where
         Self::try_new_in(inner, GlobalAllocator)
     }
 
+    /// Creates a COM object and returns a smart pointer that owns the initial reference.
+    #[inline]
+    pub fn new_rc<R>(inner: T) -> Result<ComRc<R>, NTSTATUS>
+    where
+        R: ComInterface + ComInterfaceInfo<Vtable = I>,
+    {
+        Self::new_rc_in(inner, GlobalAllocator)
+    }
+
+    /// Creates a COM object and returns a smart pointer that owns the initial reference.
+    #[inline]
+    pub fn try_new_rc<R>(inner: T) -> Option<ComRc<R>>
+    where
+        R: ComInterface + ComInterfaceInfo<Vtable = I>,
+    {
+        Self::try_new_rc_in(inner, GlobalAllocator)
+    }
+
     /// # Safety
     /// `outer_unknown` must point to a valid outer IUnknown vtable.
     #[inline]
-    pub fn new_aggregated(inner: T, outer_unknown: *mut IUnknownVtbl) -> *mut c_void {
+    pub fn new_aggregated(inner: T, outer_unknown: *mut IUnknownVtbl) -> Result<*mut c_void, NTSTATUS> {
         Self::new_aggregated_in(inner, outer_unknown, GlobalAllocator)
     }
 
@@ -408,7 +443,7 @@ mod tests {
     fn add_ref_release_drops() {
         DROP_COUNT.store(0, Ordering::Relaxed);
 
-        let ptr = ComObject::<Dummy, IUnknownVtbl>::new(Dummy);
+        let ptr = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
 
         unsafe {
             assert_eq!(ComObject::<Dummy, IUnknownVtbl>::shim_add_ref(ptr), 2);
@@ -423,7 +458,7 @@ mod tests {
     fn query_interface_iunknown_returns_self() {
         DROP_COUNT.store(0, Ordering::Relaxed);
 
-        let ptr = ComObject::<Dummy, IUnknownVtbl>::new(Dummy);
+        let ptr = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
         let mut out = core::ptr::null_mut();
 
         let status = unsafe {
@@ -455,7 +490,8 @@ mod tests {
         let ptr = ComObject::<Dummy, IUnknownVtbl>::new_aggregated(
             Dummy,
             &OUTER_VTBL as *const _ as *mut _,
-        );
+        )
+        .unwrap();
 
         unsafe {
             let vtbl = *(ptr as *mut *mut IUnknownVtbl);

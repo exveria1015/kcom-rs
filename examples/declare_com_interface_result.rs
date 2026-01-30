@@ -39,7 +39,7 @@ impl_com_interface! {
 impl_com_object!(Worker, IResultSampleVtbl);
 
 fn main() {
-    let raw = Worker::new_com(Worker);
+    let raw = Worker::new_com(Worker).unwrap();
 
     unsafe {
         let vtbl = *(raw as *mut *const IResultSampleVtbl);

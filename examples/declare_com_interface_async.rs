@@ -4,11 +4,9 @@ mod async_example {
     use core::pin::Pin;
     use core::task::{Context, Poll};
 
-    use std::boxed::Box;
-
     use kcom::{
-        declare_com_interface, impl_com_interface, impl_com_object, ComObject, GUID, IUnknownVtbl,
-        NTSTATUS, STATUS_SUCCESS,
+        declare_com_interface, impl_com_interface, impl_com_object, pin_init, ComObject,
+        GlobalAllocator, GUID, IUnknownVtbl, InitBox, InitBoxTrait, NTSTATUS, STATUS_SUCCESS,
     };
 
     declare_com_interface! {
@@ -47,11 +45,17 @@ mod async_example {
     struct AsyncFoo;
 
     unsafe impl IAsyncFoo for AsyncFoo {
-        fn init(&self, _value: u32) -> Pin<Box<dyn Future<Output = NTSTATUS> + Send + '_>> {
-            Box::pin(YieldOnce {
-                value: STATUS_SUCCESS,
-                yielded: false,
-            })
+        type InitFuture<'a> = YieldOnce;
+        type Allocator = GlobalAllocator;
+
+        fn init(&self, _value: u32) -> impl InitBoxTrait<Self::InitFuture<'_>, Self::Allocator, NTSTATUS> {
+            InitBox::new(
+                GlobalAllocator,
+                pin_init!(YieldOnce {
+                    value: STATUS_SUCCESS,
+                    yielded: false,
+                }),
+            )
         }
     }
 
@@ -65,7 +69,7 @@ mod async_example {
     impl_com_object!(AsyncFoo, IAsyncFooVtbl);
 
     pub fn run() {
-        let raw = AsyncFoo::new_com(AsyncFoo);
+        let raw = AsyncFoo::new_com(AsyncFoo).unwrap();
 
         unsafe {
             let vtbl = *(raw as *mut *const IAsyncFooVtbl);

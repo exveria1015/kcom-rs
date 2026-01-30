@@ -70,20 +70,22 @@ impl ComImpl<IFooVtbl> for Foo {
 impl_com_object!(Foo, IFooVtbl);
 
 fn main() {
-    let raw = Foo::new_com(Foo);
+    let com = Foo::new_com_rc::<IFooRaw>(Foo).unwrap();
 
     unsafe {
-        let vtbl = *(raw as *mut *const IFooVtbl);
-        let status = ((*vtbl).ping)(raw, 42);
+        let ptr = com.as_ptr();
+        let vtbl = *(ptr as *mut *const IFooVtbl);
+        let status = ((*vtbl).ping)(ptr as *mut _, 42);
         assert_eq!(status, STATUS_SUCCESS);
-
-        ComObject::<Foo, IFooVtbl>::shim_release(raw);
     }
 }
 ```
 
 When supporting additional interfaces, return explicit tear-off or aggregated pointers for
 non-primary interfaces so the returned pointer’s vtable matches the requested IID.
+
+Use `new_com_rc::<IFooRaw>` (or `new_com_rc_in`) to receive a `ComRc` that owns the initial
+reference. `new_com` still returns a raw pointer with refcount 1.
 
 ## Usage (async interface)
 
@@ -117,31 +119,36 @@ declare_com_interface! {
 
 ### Implementing async methods
 
-Without sugar, you must return a boxed future:
+Without sugar, you must return an initializer (InitBox) that the shim will allocate:
 
 ```rust
-use core::future::Future;
-use core::pin::Pin;
+use core::future::{ready, Future, Ready};
+
+use kcom::{GlobalAllocator, InitBox, pin_init};
 
 // Async interfaces are `unsafe` to implement because they use a blocking executor.
 unsafe impl IMyDriver for MyDriver {
-    fn init(&self) -> Pin<Box<dyn Future<Output = NTSTATUS> + Send + '_>> {
-        Box::pin(async move { STATUS_SUCCESS })
+    type InitFuture<'a> = Ready<NTSTATUS>;
+    type Allocator = GlobalAllocator;
+
+    fn init(&self) -> impl InitBoxTrait<Self::InitFuture<'_>, Self::Allocator, NTSTATUS> {
+        InitBox::new(GlobalAllocator, pin_init!(ready(STATUS_SUCCESS)))
     }
 }
 ```
 
-With `async-impl` enabled, use `#[kcom::async_impl]` (powered by `async-trait`):
+`async-impl` (powered by `async-trait`) does not support returning initializer types, so for
+`async-com` you must implement the InitBox pattern manually.
 
 ```rust
 use kcom::async_impl;
 
-#[async_impl]
-unsafe impl IMyDriver for MyDriver {
-    async fn init(&self) -> NTSTATUS {
-        STATUS_SUCCESS
-    }
-}
+// #[async_impl]
+// unsafe impl IMyDriver for MyDriver {
+//     async fn init(&self) -> NTSTATUS {
+//         STATUS_SUCCESS
+//     }
+// }
 ```
 
 ### Async blocking caveat
@@ -159,11 +166,31 @@ The blocking executor waits in kernel mode. For safe usage:
 
 1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher is rejected (always enforced)
 2. **Watchdog**: debug-only timeout detects deadlocks
-3. **Stack safety**: wakers use heap-owned events (`Arc`) and futures are heap-pinned via `Box::pin`
+3. **Stack safety**: wakers use heap-owned events (`Arc`); the executor pins on the stack
 4. **Deadlock safety**: do not call while holding spinlocks or resources needed by the future
 
-Each async call allocates a boxed future. This is suitable for control paths (init, create, etc.).
-Real-time / hot paths may require allocation-free designs.
+Each async call still requires a heap allocation (KBox) from the implementation. This is suitable
+for control paths (init, create, etc.). Real-time / hot paths may require allocation-free designs.
+
+### True async via WorkItems
+
+When you must avoid blocking (IRQL > APC_LEVEL), queue the future onto a WorkItem and return
+`STATUS_PENDING`. KMDF and WDM helpers are provided in the executor module:
+
+```rust
+#[cfg(driver_model__driver_type = "KMDF")]
+unsafe {
+    kcom::executor::spawn_work_item_kmdf(device, future, completion_callback)?;
+}
+
+#[cfg(driver_model__driver_type = "WDM")]
+unsafe {
+    kcom::executor::spawn_work_item_wdm(device, queue, future, completion_callback)?;
+}
+```
+
+> **WDM注意**: ドライバの Unload と WorkItem 実行の競合を避けるため、
+> `IoAcquireRemoveLock` 等で寿命管理を行ってください。
 
 ## Client-side COM pointers
 

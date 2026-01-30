@@ -2,9 +2,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::alloc::Layout;
+use core::mem::ManuallyDrop;
+use core::pin::Pin;
 use core::ptr;
+use core::ptr::NonNull;
+use core::marker::PhantomData;
 #[cfg(feature = "driver")]
 use core::ffi::c_void;
+
+use crate::iunknown::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES};
 
 pub trait Allocator {
     /// # Safety
@@ -25,6 +31,197 @@ pub trait Allocator {
     /// # Safety
     /// `ptr` must have been allocated by this allocator with the same `layout`.
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout);
+}
+
+/// Fallible allocation helper that returns `STATUS_INSUFFICIENT_RESOURCES` on OOM.
+#[inline]
+pub fn try_alloc_layout<A: Allocator>(alloc: &A, layout: Layout) -> Result<NonNull<u8>, NTSTATUS> {
+    let ptr = unsafe { alloc.alloc(layout) };
+    NonNull::new(ptr).ok_or(STATUS_INSUFFICIENT_RESOURCES)
+}
+
+/// Fallible allocation helper that writes `value` into allocator-owned memory.
+#[inline]
+pub fn try_alloc_value_in<T, A: Allocator>(alloc: &A, value: T) -> Result<NonNull<T>, NTSTATUS> {
+    let layout = Layout::new::<T>();
+    let ptr = unsafe { alloc.alloc(layout) } as *mut T;
+    let ptr = NonNull::new(ptr).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    unsafe {
+        ptr.as_ptr().write(value);
+    }
+    Ok(ptr)
+}
+
+pub enum KBoxError<E> {
+    Alloc(NTSTATUS),
+    Init(E),
+}
+
+impl<E> KBoxError<E>
+where
+    E: Into<NTSTATUS>,
+{
+    #[inline]
+    pub fn into_status(self) -> NTSTATUS {
+        match self {
+            Self::Alloc(status) => status,
+            Self::Init(err) => err.into(),
+        }
+    }
+}
+
+pub trait PinInit<T, E> {
+    /// # Safety
+    /// `ptr` must be valid for writes and aligned for `T`.
+    unsafe fn init(&mut self, ptr: *mut T) -> Result<(), E>;
+}
+
+pub struct PinInitOnce<F> {
+    init: Option<F>,
+}
+
+impl<F> PinInitOnce<F> {
+    #[inline]
+    pub fn new(init: F) -> Self {
+        Self { init: Some(init) }
+    }
+}
+
+impl<T, E, F> PinInit<T, E> for PinInitOnce<F>
+where
+    F: FnOnce(*mut T) -> Result<(), E>,
+{
+    #[inline]
+    unsafe fn init(&mut self, ptr: *mut T) -> Result<(), E> {
+        let init = self.init.take().expect("PinInitOnce called twice");
+        init(ptr)
+    }
+}
+
+impl<T, E> PinInit<T, E> for crate::alloc::boxed::Box<dyn PinInit<T, E> + '_> {
+    #[inline]
+    unsafe fn init(&mut self, ptr: *mut T) -> Result<(), E> {
+        (**self).init(ptr)
+    }
+}
+
+pub struct KBox<T: ?Sized, A: Allocator = GlobalAllocator> {
+    ptr: NonNull<T>,
+    alloc: ManuallyDrop<A>,
+    layout: Layout,
+}
+
+impl<T, A: Allocator> KBox<T, A> {
+    #[inline]
+    pub fn try_pin_init<E>(alloc: A, mut init: impl PinInit<T, E>) -> Result<Pin<Self>, KBoxError<E>> {
+        let layout = Layout::new::<T>();
+        let ptr = unsafe { alloc.alloc(layout) } as *mut T;
+        let ptr = NonNull::new(ptr).ok_or(KBoxError::Alloc(STATUS_INSUFFICIENT_RESOURCES))?;
+        unsafe {
+            if let Err(err) = init.init(ptr.as_ptr()) {
+                alloc.dealloc(ptr.as_ptr() as *mut u8, layout);
+                return Err(KBoxError::Init(err));
+            }
+        }
+        // SAFETY: value is initialized in-place and owned by this KBox.
+        Ok(unsafe { Pin::new_unchecked(Self::from_raw_parts(ptr, alloc, layout)) })
+    }
+
+    #[inline]
+    fn from_raw_parts(ptr: NonNull<T>, alloc: A, layout: Layout) -> Self {
+        Self {
+            ptr,
+            alloc: ManuallyDrop::new(alloc),
+            layout,
+        }
+    }
+
+    #[inline]
+    pub fn into_raw_parts(self) -> (NonNull<T>, A, Layout) {
+        let mut this = ManuallyDrop::new(self);
+        let ptr = this.ptr;
+        let alloc = unsafe { ManuallyDrop::take(&mut this.alloc) };
+        let layout = this.layout;
+        (ptr, alloc, layout)
+    }
+
+    #[inline]
+    pub fn as_ptr(&self) -> *mut T {
+        self.ptr.as_ptr()
+    }
+}
+
+impl<T: ?Sized, A: Allocator> core::ops::Deref for KBox<T, A> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.ptr.as_ref() }
+    }
+}
+
+impl<T: ?Sized, A: Allocator> core::ops::DerefMut for KBox<T, A> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.ptr.as_mut() }
+    }
+}
+
+impl<T: ?Sized, A: Allocator> Drop for KBox<T, A> {
+    fn drop(&mut self) {
+        unsafe {
+            ptr::drop_in_place(self.ptr.as_ptr());
+            let alloc = ManuallyDrop::take(&mut self.alloc);
+            alloc.dealloc(self.ptr.as_ptr() as *mut u8, self.layout);
+        }
+    }
+}
+
+pub trait InitBoxTrait<T, A: Allocator, E> {
+    fn try_pin(self) -> Result<Pin<KBox<T, A>>, KBoxError<E>>;
+}
+
+pub struct InitBox<T, A: Allocator, E, I> {
+    alloc: A,
+    init: I,
+    _marker: PhantomData<fn() -> (T, E)>,
+}
+
+impl<T, A: Allocator, E, I> InitBox<T, A, E, I>
+where
+    I: PinInit<T, E>,
+{
+    #[inline]
+    pub fn new(alloc: A, init: I) -> Self {
+        Self {
+            alloc,
+            init,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T, A: Allocator, E, I> InitBoxTrait<T, A, E> for InitBox<T, A, E, I>
+where
+    I: PinInit<T, E>,
+{
+    #[inline]
+    fn try_pin(self) -> Result<Pin<KBox<T, A>>, KBoxError<E>> {
+        KBox::try_pin_init(self.alloc, self.init)
+    }
+}
+
+#[cfg(feature = "driver")]
+pub type KernelInitBox<T, E, I> = InitBox<T, WdkAllocator, E, I>;
+
+#[cfg(feature = "driver")]
+#[inline]
+pub fn init_box_with_tag<'a, T, E>(
+    pool: PoolType,
+    tag: u32,
+    init: impl PinInit<T, E> + 'a,
+) -> KernelInitBox<T, E, impl PinInit<T, E> + 'a> {
+    InitBox::new(WdkAllocator::new(pool, tag), init)
 }
 
 pub struct GlobalAllocator;

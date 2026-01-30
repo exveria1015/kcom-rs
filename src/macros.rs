@@ -344,11 +344,21 @@ macro_rules! __kcom_define_interface {
                 $($trait_methods)*
                 $(#[$method_attr])*
                 #[cfg(feature = "async-com")]
-                fn $method_name(&self $(, $arg_name : $arg_ty)*) -> ::core::pin::Pin<
-                    $crate::alloc::boxed::Box<
-                        dyn ::core::future::Future<Output = $ret_ty> + Send + '_
-                    >
-                >;
+                $crate::paste::paste! {
+                    type [<$method_name:camel Future>]<'a>: ::core::future::Future<Output = $ret_ty> + Send + 'a
+                    where
+                        Self: 'a;
+                }
+                #[cfg(feature = "async-com")]
+                type Allocator: $crate::allocator::Allocator = $crate::allocator::GlobalAllocator;
+                #[cfg(feature = "async-com")]
+                $crate::paste::paste! {
+                    fn $method_name(&self $(, $arg_name : $arg_ty)*) -> impl $crate::allocator::InitBoxTrait<
+                        Self::[<$method_name:camel Future>]<'_>,
+                        Self::Allocator,
+                        $crate::NTSTATUS
+                    >;
+                }
             ],
             vtable_fields [
                 $($vtable_fields)*
@@ -374,11 +384,17 @@ macro_rules! __kcom_define_interface {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
                     };
-                    // SAFETY: caller of the shim must uphold block_on's safety requirements.
-                    let result = unsafe {
-                        $crate::executor::block_on(wrapper.inner.$method_name($($arg_name),*))
+                    let init = wrapper.inner.$method_name($($arg_name),*);
+                    let future = match init.try_pin() {
+                        Ok(future) => future,
+                        Err(err) => return err.into_status(),
                     };
-                    $crate::__kcom_map_return!($ret_ty, result)
+                    // SAFETY: caller of the shim must uphold block_on's safety requirements.
+                    let result = unsafe { $crate::executor::try_block_on(future) };
+                    match result {
+                        Ok(result) => $crate::__kcom_map_return!($ret_ty, result),
+                        Err(status) => status,
+                    }
                 }
             ],
             ;
@@ -656,5 +672,33 @@ macro_rules! __kcom_map_return {
     };
     ($ret_ty:ty, $expr:expr) => {
         $expr
+    };
+}
+
+#[macro_export]
+macro_rules! pin_init {
+    ($value:expr) => {
+        $crate::allocator::PinInitOnce::new(|ptr| {
+            // SAFETY: caller guarantees `ptr` is valid for writes.
+            unsafe { core::ptr::write(ptr, $value) };
+            ::core::result::Result::<(), _>::Ok(())
+        })
+    };
+    (|$ptr:ident| $body:block) => {
+        $crate::allocator::PinInitOnce::new(|$ptr| $body)
+    };
+}
+
+#[macro_export]
+macro_rules! pin_init_async {
+    ($body:expr) => {
+        $crate::pin_init!(async move { $body })
+    };
+}
+
+#[macro_export]
+macro_rules! init_box {
+    ($alloc:expr, $init:expr) => {
+        $crate::allocator::InitBox::new($alloc, $init)
     };
 }

@@ -63,7 +63,7 @@ impl_com_interface! {
 impl_com_object!(Miniport, IMiniportWaveRTVtbl);
 
 fn main() {
-    let raw = Miniport::new_com(Miniport);
+    let raw = Miniport::new_com(Miniport).unwrap();
 
     unsafe {
         let vtbl = *(raw as *mut *const IMiniportWaveRTVtbl);

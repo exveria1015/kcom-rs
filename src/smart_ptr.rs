@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn from_raw_addref_balances_release() {
         DROP_COUNT.store(0, Ordering::Relaxed);
-        let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy);
+        let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
 
         let com = unsafe { ComRc::<IUnknownRaw>::from_raw_addref(raw as *mut IUnknownRaw).unwrap() };
         drop(com);
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn from_raw_consumes_reference() {
         DROP_COUNT.store(0, Ordering::Relaxed);
-        let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy);
+        let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
 
         let com = unsafe { ComRc::<IUnknownRaw>::from_raw(raw as *mut IUnknownRaw).unwrap() };
         drop(com);
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn clone_adds_reference() {
         DROP_COUNT.store(0, Ordering::Relaxed);
-        let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy);
+        let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
 
         let com = unsafe { ComRc::<IUnknownRaw>::from_raw_addref(raw as *mut IUnknownRaw).unwrap() };
         let com_clone = com.clone();
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn query_interface_returns_comrc() {
-        let raw = Dummy::new_com(Dummy);
+        let raw = Dummy::new_com(Dummy).unwrap();
         let com = unsafe { ComRc::<IFooRaw>::from_raw_addref(raw as *mut IFooRaw).unwrap() };
 
         let queried = com.query_interface::<IFooRaw>().unwrap();

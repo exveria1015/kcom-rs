@@ -37,7 +37,7 @@ impl_com_interface! {
 impl_com_object!(Foo, IFooVtbl);
 
 fn main() {
-    let raw = Foo::new_com(Foo);
+    let raw = Foo::new_com(Foo).unwrap();
     let foo_ptr = raw as *mut IFooRaw;
     let com_ref = unsafe { ComRc::from_raw_addref(foo_ptr).unwrap() };
 
