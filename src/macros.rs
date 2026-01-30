@@ -205,6 +205,146 @@ macro_rules! impl_com_interface {
     };
 }
 
+
+#[macro_export]
+/// Implements `ComImpl` and builds the VTABLE for a secondary interface on `ComObject2`.
+///
+/// Provide the primary interface vtable and allocator type so secondary shims can locate the object.
+macro_rules! impl_com_interface_secondary {
+    (
+        impl $ty:ty: $trait_name:ident {
+            parent = $parent_vtbl:ty,
+            primary = $primary_vtbl:ty,
+            allocator = $alloc:ty,
+            methods = [$($method:ident),* $(,)?],
+            this = $this:ident,
+            qi = [$($qi:tt)+],
+            $(fallback = $fallback:ty,)?
+        }
+    ) => {
+        $crate::impl_com_interface_secondary!(@impl
+            $ty,
+            $trait_name,
+            $parent_vtbl,
+            $primary_vtbl,
+            $alloc,
+            [$($method),*],
+            [$($qi)+],
+            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
+            $this
+        );
+    };
+    (
+        impl $ty:ty: $trait_name:ident {
+            parent = $parent_vtbl:ty,
+            primary = $primary_vtbl:ty,
+            allocator = $alloc:ty,
+            methods = [$($method:ident),* $(,)?],
+            qi = [$($qi:tt)+],
+            $(fallback = $fallback:ty,)?
+        }
+    ) => {
+        $crate::impl_com_interface_secondary!(@impl
+            $ty,
+            $trait_name,
+            $parent_vtbl,
+            $primary_vtbl,
+            $alloc,
+            [$($method),*],
+            [$($qi)+],
+            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
+            this
+        );
+    };
+    (
+        impl $ty:ty: $trait_name:ident {
+            parent = $parent_vtbl:ty,
+            primary = $primary_vtbl:ty,
+            methods = [$($method:ident),* $(,)?],
+            qi = [$($qi:tt)+],
+            $(fallback = $fallback:ty,)?
+        }
+    ) => {
+        $crate::impl_com_interface_secondary!(@impl
+            $ty,
+            $trait_name,
+            $parent_vtbl,
+            $primary_vtbl,
+            $crate::allocator::GlobalAllocator,
+            [$($method),*],
+            [$($qi)+],
+            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
+            this
+        );
+    };
+    (
+        impl $ty:ty: $trait_name:ident {
+            parent = $parent_vtbl:ty,
+            primary = $primary_vtbl:ty,
+            methods = [$($method:ident),* $(,)?],
+            $(fallback = $fallback:ty,)?
+        }
+    ) => {
+        $crate::impl_com_interface_secondary!(@impl
+            $ty,
+            $trait_name,
+            $parent_vtbl,
+            $primary_vtbl,
+            $crate::allocator::GlobalAllocator,
+            [$($method),*],
+            [$trait_name],
+            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
+            this
+        );
+    };
+    (@parent IUnknownVtbl, $ty:ty, $trait_name:ident, $primary_vtbl:ty, $alloc:ty) => {{
+        $crate::paste::paste! {
+            $crate::IUnknownVtbl {
+                QueryInterface: $crate::wrapper::ComObject2::<$ty, $primary_vtbl, [<$trait_name Vtbl>], $alloc>::shim_query_interface_secondary,
+                AddRef: $crate::wrapper::ComObject2::<$ty, $primary_vtbl, [<$trait_name Vtbl>], $alloc>::shim_add_ref_secondary,
+                Release: $crate::wrapper::ComObject2::<$ty, $primary_vtbl, [<$trait_name Vtbl>], $alloc>::shim_release_secondary,
+            }
+        }
+    }};
+    (@parent $parent_vtbl:ty, $ty:ty, $trait_name:ident, $primary_vtbl:ty, $alloc:ty) => {
+        *<$ty as $crate::ComImpl<$parent_vtbl>>::VTABLE
+    };
+    (@impl
+        $ty:ty,
+        $trait_name:ident,
+        $parent_vtbl:ty,
+        $primary_vtbl:ty,
+        $alloc:ty,
+        [$($method:ident),*],
+        [$($qi:tt)+],
+        $fallback:ty,
+        $this:ident
+    ) => {
+        $crate::paste::paste! {
+            impl $crate::ComImpl<[<$trait_name Vtbl>]> for $ty {
+                const VTABLE: &'static [<$trait_name Vtbl>] = &[<$trait_name Vtbl>] {
+                    parent: $crate::impl_com_interface_secondary!(
+                        @parent $parent_vtbl,
+                        $ty,
+                        $trait_name,
+                        $primary_vtbl,
+                        $alloc
+                    ),
+                    $($method: [<shim_ $trait_name _ $method _secondary>]::<$ty, $primary_vtbl, $alloc>,)*
+                };
+
+                $crate::impl_query_interface! {
+                    Self,
+                    $this,
+                    riid,
+                    [$($qi)+],
+                    fallback = $fallback
+                }
+            }
+        }
+    };
+}
+
 #[macro_export]
 /// Returns early with `Err(status)` when `cond` is false.
 macro_rules! ensure {
@@ -350,7 +490,7 @@ macro_rules! __kcom_define_interface {
                         Self: 'a;
                 }
                 #[cfg(feature = "async-com")]
-                type Allocator: $crate::allocator::Allocator = $crate::allocator::GlobalAllocator;
+                type Allocator: $crate::allocator::Allocator;
                 #[cfg(feature = "async-com")]
                 $crate::paste::paste! {
                     fn $method_name(&self $(, $arg_name : $arg_ty)*) -> impl $crate::allocator::InitBoxTrait<
@@ -374,7 +514,7 @@ macro_rules! __kcom_define_interface {
                 compile_error!("async-com feature is required to use async methods in declare_com_interface!");
                 #[cfg(feature = "async-com")]
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::__kcom_vtable_ret!($ret_ty)
@@ -383,6 +523,33 @@ macro_rules! __kcom_define_interface {
                 {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
+                    let init = wrapper.inner.$method_name($($arg_name),*);
+                    let future = match init.try_pin() {
+                        Ok(future) => future,
+                        Err(err) => return err.into_status(),
+                    };
+                    // SAFETY: caller of the shim must uphold block_on's safety requirements.
+                    let result = unsafe { $crate::executor::try_block_on(future) };
+                    match result {
+                        Ok(result) => $crate::__kcom_map_return!($ret_ty, result),
+                        Err(status) => status,
+                    }
+                }
+                #[cfg(feature = "async-com")]
+                #[allow(non_snake_case)]
+                #[allow(dead_code)]
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                    this: *mut core::ffi::c_void
+                    $(, $arg_name: $arg_ty)*
+                ) -> $crate::__kcom_vtable_ret!($ret_ty)
+                where
+                    T: $trait_name + $crate::ComImpl<[<$trait_name Vtbl>]> + $crate::ComImpl<P>,
+                    P: $crate::traits::InterfaceVtable,
+                    A: $crate::allocator::Allocator + Send + Sync,
+                {
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject2::<T, P, [<$trait_name Vtbl>], A>::from_secondary_ptr(this)
                     };
                     let init = wrapper.inner.$method_name($($arg_name),*);
                     let future = match init.try_pin() {
@@ -439,7 +606,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -448,6 +615,22 @@ macro_rules! __kcom_define_interface {
                 {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
+                    $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
+                }
+                #[allow(non_snake_case)]
+                #[allow(dead_code)]
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                    this: *mut core::ffi::c_void
+                    $(, $arg_name: $arg_ty)*
+                ) -> $crate::NTSTATUS
+                where
+                    T: $trait_name + $crate::ComImpl<[<$trait_name Vtbl>]> + $crate::ComImpl<P>,
+                    P: $crate::traits::InterfaceVtable,
+                    A: $crate::allocator::Allocator + Send + Sync,
+                {
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject2::<T, P, [<$trait_name Vtbl>], A>::from_secondary_ptr(this)
                     };
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
@@ -494,7 +677,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -503,6 +686,21 @@ macro_rules! __kcom_define_interface {
                 {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
+                    $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
+                }
+                #[allow(non_snake_case)]
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                    this: *mut core::ffi::c_void
+                    $(, $arg_name: $arg_ty)*
+                ) -> $crate::NTSTATUS
+                where
+                    T: $trait_name + $crate::ComImpl<[<$trait_name Vtbl>]> + $crate::ComImpl<P>,
+                    P: $crate::traits::InterfaceVtable,
+                    A: $crate::allocator::Allocator + Send + Sync,
+                {
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject2::<T, P, [<$trait_name Vtbl>], A>::from_secondary_ptr(this)
                     };
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
@@ -549,7 +747,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -558,6 +756,21 @@ macro_rules! __kcom_define_interface {
                 {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
+                    $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
+                }
+                #[allow(non_snake_case)]
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                    this: *mut core::ffi::c_void
+                    $(, $arg_name: $arg_ty)*
+                ) -> $crate::NTSTATUS
+                where
+                    T: $trait_name + $crate::ComImpl<[<$trait_name Vtbl>]> + $crate::ComImpl<P>,
+                    P: $crate::traits::InterfaceVtable,
+                    A: $crate::allocator::Allocator + Send + Sync,
+                {
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject2::<T, P, [<$trait_name Vtbl>], A>::from_secondary_ptr(this)
                     };
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
@@ -604,7 +817,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $ret_ty
@@ -613,6 +826,22 @@ macro_rules! __kcom_define_interface {
                 {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
+                    $crate::__kcom_map_return!($ret_ty, wrapper.inner.$method_name($($arg_name),*))
+                }
+                #[allow(non_snake_case)]
+                #[allow(dead_code)]
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                    this: *mut core::ffi::c_void
+                    $(, $arg_name: $arg_ty)*
+                ) -> $ret_ty
+                where
+                    T: $trait_name + $crate::ComImpl<[<$trait_name Vtbl>]> + $crate::ComImpl<P>,
+                    P: $crate::traits::InterfaceVtable,
+                    A: $crate::allocator::Allocator + Send + Sync,
+                {
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject2::<T, P, [<$trait_name Vtbl>], A>::from_secondary_ptr(this)
                     };
                     $crate::__kcom_map_return!($ret_ty, wrapper.inner.$method_name($($arg_name),*))
                 }
@@ -702,3 +931,5 @@ macro_rules! init_box {
         $crate::allocator::InitBox::new($alloc, $init)
     };
 }
+
+

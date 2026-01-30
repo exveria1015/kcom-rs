@@ -7,6 +7,63 @@ use core::future::Future;
 use core::pin::pin;
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
+#[cfg(not(all(
+    feature = "async-com-kernel",
+    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
+)))]
+mod host {
+    use super::*;
+    use core::pin::Pin;
+
+    struct HostWaker;
+
+    unsafe fn host_waker_clone(data: *const ()) -> RawWaker {
+        RawWaker::new(data, &HOST_WAKER_VTABLE)
+    }
+
+    unsafe fn host_waker_wake(_data: *const ()) {}
+
+    unsafe fn host_waker_wake_by_ref(_data: *const ()) {}
+
+    unsafe fn host_waker_drop(_data: *const ()) {}
+
+    static HOST_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
+        host_waker_clone,
+        host_waker_wake,
+        host_waker_wake_by_ref,
+        host_waker_drop,
+    );
+
+    fn host_waker() -> Waker {
+        let raw = RawWaker::new(core::ptr::null(), &HOST_WAKER_VTABLE);
+        unsafe { Waker::from_raw(raw) }
+    }
+
+    /// Execute a Future synchronously in user mode.
+    pub fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = pin!(future);
+        block_on_pinned(future.as_mut())
+    }
+
+    /// Execute a pinned Future synchronously in user mode.
+    pub fn block_on_pinned<F: Future>(mut future: Pin<&mut F>) -> F::Output {
+        let waker = host_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        loop {
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(result) => return result,
+                Poll::Pending => core::hint::spin_loop(),
+            }
+        }
+    }
+
+    /// Execute a Future synchronously and return the result.
+    pub fn try_block_on<F: Future>(future: F) -> Result<F::Output, i32> {
+        Ok(block_on(future))
+    }
+}
+
 #[cfg(all(
     feature = "async-com-kernel",
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
@@ -370,7 +427,15 @@ mod kernel {
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
 ))]
 pub use kernel::block_on;
+#[cfg(all(
+    feature = "async-com-kernel",
+    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
+))]
 pub use kernel::block_on_pinned;
+#[cfg(all(
+    feature = "async-com-kernel",
+    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
+))]
 pub use kernel::try_block_on;
 #[cfg(driver_model__driver_type = "KMDF")]
 pub use kernel::spawn_work_item_kmdf;
@@ -382,5 +447,13 @@ pub use kernel::spawn_work_item_wdm;
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
 )))]
 pub use host::block_on;
+#[cfg(not(all(
+    feature = "async-com-kernel",
+    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
+)))]
 pub use host::block_on_pinned;
+#[cfg(not(all(
+    feature = "async-com-kernel",
+    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
+)))]
 pub use host::try_block_on;
