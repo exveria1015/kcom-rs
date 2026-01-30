@@ -268,12 +268,7 @@ impl Allocator for WdkAllocator {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
 
-        let flags = match self.pool {
-            PoolType::NonPagedNx => POOL_FLAG_NON_PAGED,
-            PoolType::Paged => POOL_FLAG_PAGED,
-        };
-
-        let ptr = unsafe { ExAllocatePool2(flags, layout.size(), self.tag) };
+        let ptr = unsafe { ex_allocate_pool(self.pool, layout.size(), self.tag) };
         ptr as *mut u8
     }
 
@@ -292,11 +287,83 @@ const POOL_FLAG_PAGED: u64 = 0x0000_0001;
 const POOL_FLAG_NON_PAGED: u64 = 0x0000_0040;
 
 #[cfg(feature = "driver")]
+const POOL_TYPE_PAGED: u32 = 1;
+#[cfg(feature = "driver")]
+const POOL_TYPE_NON_PAGED_NX: u32 = 512;
+
+#[cfg(feature = "driver")]
+type ExAllocatePool2Fn = unsafe extern "C" fn(u64, usize, u32) -> *mut c_void;
+
+#[cfg(feature = "driver")]
+unsafe fn ex_allocate_pool(pool: PoolType, size: usize, tag: u32) -> *mut c_void {
+    let flags = match pool {
+        PoolType::NonPagedNx => POOL_FLAG_NON_PAGED,
+        PoolType::Paged => POOL_FLAG_PAGED,
+    };
+    if let Some(func) = unsafe { get_ex_allocate_pool2() } {
+        return unsafe { func(flags, size, tag) };
+    }
+    let pool_type = match pool {
+        PoolType::NonPagedNx => POOL_TYPE_NON_PAGED_NX,
+        PoolType::Paged => POOL_TYPE_PAGED,
+    };
+    unsafe { ExAllocatePoolWithTag(pool_type, size, tag) }
+}
+
+#[cfg(feature = "driver")]
+unsafe fn get_ex_allocate_pool2() -> Option<ExAllocatePool2Fn> {
+    const NAME: [u16; 16] = [
+        b'E' as u16,
+        b'x' as u16,
+        b'A' as u16,
+        b'l' as u16,
+        b'l' as u16,
+        b'o' as u16,
+        b'c' as u16,
+        b'a' as u16,
+        b't' as u16,
+        b'e' as u16,
+        b'P' as u16,
+        b'o' as u16,
+        b'o' as u16,
+        b'l' as u16,
+        b'2' as u16,
+        0,
+    ];
+    let name = UNICODE_STRING {
+        Length: 30,
+        MaximumLength: 32,
+        Buffer: NAME.as_ptr() as *mut u16,
+    };
+    let ptr = unsafe { MmGetSystemRoutineAddress(&name) };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { core::mem::transmute(ptr) })
+    }
+}
+
+#[cfg(feature = "driver")]
+#[repr(C)]
+struct UNICODE_STRING {
+    Length: u16,
+    MaximumLength: u16,
+    Buffer: *mut u16,
+}
+
+#[cfg(feature = "driver")]
 unsafe extern "C" {
     fn ExAllocatePool2(flags: u64, number_of_bytes: usize, tag: u32) -> *mut c_void;
 }
 
 #[cfg(feature = "driver")]
 unsafe extern "C" {
+    fn ExAllocatePoolWithTag(pool_type: u32, number_of_bytes: usize, tag: u32) -> *mut c_void;
     fn ExFreePoolWithTag(p: *mut c_void, tag: u32);
+}
+
+#[cfg(feature = "driver")]
+#[link(name = "ntoskrnl")]
+unsafe extern "system" {
+    fn MmGetSystemRoutineAddress(name: *const UNICODE_STRING) -> *mut c_void;
 }
