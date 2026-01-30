@@ -16,6 +16,26 @@ pub unsafe trait InterfaceVtable: Sized + 'static {}
 pub trait ComInterfaceInfo {
     type Vtable: InterfaceVtable;
     const IID: GUID;
+    const IID_STR: &'static str;
+}
+
+/// Returns `Some(ptr)` when `riid` matches `T::IID`, otherwise `None`.
+///
+/// This helper reduces boilerplate in manual `query_interface` implementations
+/// and ensures null pointers are not returned on match.
+#[inline]
+pub fn match_interface_ptr<T: ComInterfaceInfo>(
+    riid: &GUID,
+    ptr: *mut c_void,
+) -> Option<*mut c_void> {
+    if *riid != T::IID {
+        return None;
+    }
+    if ptr.is_null() {
+        None
+    } else {
+        Some(ptr)
+    }
 }
 
 /// Implementation logic for a COM interface.
@@ -44,6 +64,7 @@ pub struct IUnknownInterface;
 impl ComInterfaceInfo for IUnknownInterface {
     type Vtable = IUnknownVtbl;
     const IID: GUID = IID_IUNKNOWN;
+    const IID_STR: &'static str = "IID_IUNKNOWN";
 }
 
 // Default implementation for IUnknown logic on the inner type.

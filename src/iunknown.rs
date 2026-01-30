@@ -8,7 +8,8 @@ use crate::traits::InterfaceVtable;
 pub type NTSTATUS = i32;
 
 pub const STATUS_SUCCESS: NTSTATUS = 0;
-pub const STATUS_NOINTERFACE: NTSTATUS = 0xC000_00BBu32 as i32;
+pub const STATUS_NOT_SUPPORTED: NTSTATUS = 0xC000_00BBu32 as i32;
+pub const STATUS_NOINTERFACE: NTSTATUS = 0xC000_02B9u32 as i32;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]

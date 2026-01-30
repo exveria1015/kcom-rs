@@ -1,23 +1,26 @@
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use alloc::boxed::Box;
 use alloc::string::{FromUtf16Error, String};
-use alloc::vec::Vec;
+use core::alloc::Layout;
 use core::fmt;
+use core::mem::ManuallyDrop;
 use core::slice;
 
-use wdk_sys::ntddk::UNICODE_STRING;
+use crate::allocator::{Allocator, GlobalAllocator};
+use crate::ntddk::UNICODE_STRING;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnicodeStringError {
     TooLong,
+    AllocationFailed,
 }
 
 impl fmt::Display for UnicodeStringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooLong => write!(f, "UNICODE_STRING exceeds u16 length"),
+            Self::AllocationFailed => write!(f, "UNICODE_STRING allocation failed"),
         }
     }
 }
@@ -46,29 +49,44 @@ macro_rules! kstr {
 /// The buffer is constructed once, boxed, and never resized.
 /// Mutable accessors are intentionally omitted to keep the backing storage
 /// stable for the lifetime of the UNICODE_STRING.
-pub struct OwnedUnicodeString {
+pub struct OwnedUnicodeString<A: Allocator + Send + Sync = GlobalAllocator> {
     inner: UNICODE_STRING,
-    buffer: Box<[u16]>,
+    buffer: *mut u16,
+    buffer_len: usize,
+    alloc: ManuallyDrop<A>,
 }
 
-impl OwnedUnicodeString {
-    pub fn new(value: &str) -> Result<Self, UnicodeStringError> {
-        let mut buffer: Vec<u16> = value.encode_utf16().collect();
-        let len = buffer.len();
+impl<A: Allocator + Send + Sync> OwnedUnicodeString<A> {
+    pub fn new_in(value: &str, alloc: A) -> Result<Self, UnicodeStringError> {
+        let len = value.encode_utf16().count();
         let max_units = (u16::MAX as usize) / 2;
         if len + 1 > max_units {
             return Err(UnicodeStringError::TooLong);
         }
-        buffer.push(0);
-        let length = (len * 2) as u16;
-        let maximum_length = (buffer.len() * 2) as u16;
-        let mut buffer = buffer.into_boxed_slice();
+        let layout = Layout::array::<u16>(len + 1).map_err(|_| UnicodeStringError::TooLong)?;
+        let buffer = unsafe { alloc.alloc(layout) } as *mut u16;
+        if buffer.is_null() {
+            return Err(UnicodeStringError::AllocationFailed);
+        }
+        for (idx, unit) in value.encode_utf16().enumerate() {
+            unsafe {
+                buffer.add(idx).write(unit);
+            }
+        }
+        unsafe {
+            buffer.add(len).write(0);
+        }
         let inner = UNICODE_STRING {
-            Length: length,
-            MaximumLength: maximum_length,
-            Buffer: buffer.as_mut_ptr(),
+            Length: (len * 2) as u16,
+            MaximumLength: ((len + 1) * 2) as u16,
+            Buffer: buffer,
         };
-        Ok(Self { inner, buffer })
+        Ok(Self {
+            inner,
+            buffer,
+            buffer_len: len + 1,
+            alloc: ManuallyDrop::new(alloc),
+        })
     }
 
     #[inline]
@@ -83,7 +101,32 @@ impl OwnedUnicodeString {
 
     #[inline]
     pub fn as_utf16(&self) -> &[u16] {
-        &self.buffer[..self.inner.Length as usize / 2]
+        let len = self.inner.Length as usize / 2;
+        unsafe { slice::from_raw_parts(self.buffer, len) }
+    }
+}
+
+impl OwnedUnicodeString<GlobalAllocator> {
+    pub fn new(value: &str) -> Result<Self, UnicodeStringError> {
+        Self::new_in(value, GlobalAllocator)
+    }
+}
+
+impl<A: Allocator + Send + Sync> Drop for OwnedUnicodeString<A> {
+    fn drop(&mut self) {
+        if self.buffer.is_null() {
+            return;
+        }
+        let layout = match Layout::array::<u16>(self.buffer_len) {
+            Ok(layout) => layout,
+            Err(_) => return,
+        };
+        let alloc = unsafe { core::ptr::read(&self.alloc) };
+        let alloc = ManuallyDrop::into_inner(alloc);
+        unsafe {
+            alloc.dealloc(self.buffer as *mut u8, layout);
+        }
+        drop(alloc);
     }
 }
 

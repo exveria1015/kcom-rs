@@ -82,17 +82,20 @@ macro_rules! impl_query_interface {
         }
     };
     (@return $this:ident, this) => {{
+        debug_assert!(!$this.is_null(), "query_interface returned null for primary interface");
         Some($this)
     }};
     (@return $this:ident, $ptr:expr) => {{
         let ptr = $ptr as *mut core::ffi::c_void;
         if ptr.is_null() {
+            debug_assert!(!ptr.is_null(), "query_interface returned null pointer");
             None
         } else {
             Some(ptr)
         }
     }};
     (@return $this:ident) => {{
+        debug_assert!(!$this.is_null(), "query_interface returned null for primary interface");
         Some($this)
     }};
 }
@@ -212,6 +215,17 @@ macro_rules! ensure {
     };
 }
 
+#[macro_export]
+macro_rules! iunknown_vtbl {
+    ($ty:ty, $vtbl:ty $(,)?) => {
+        $crate::IUnknownVtbl {
+            QueryInterface: $crate::wrapper::ComObject::<$ty, $vtbl>::shim_query_interface,
+            AddRef: $crate::wrapper::ComObject::<$ty, $vtbl>::shim_add_ref,
+            Release: $crate::wrapper::ComObject::<$ty, $vtbl>::shim_release,
+        }
+    };
+}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __kcom_define_interface {
@@ -282,6 +296,7 @@ macro_rules! __kcom_define_interface {
             impl $crate::traits::ComInterfaceInfo for [<$trait_name Raw>] {
                 type Vtable = [<$trait_name Vtbl>];
                 const IID: $crate::GUID = $guid;
+                const IID_STR: &'static str = stringify!($guid);
             }
 
             unsafe impl $crate::traits::InterfaceVtable for [<$trait_name Vtbl>] {}
@@ -291,6 +306,7 @@ macro_rules! __kcom_define_interface {
             impl $crate::traits::ComInterfaceInfo for [<$trait_name Interface>] {
                 type Vtable = [<$trait_name Vtbl>];
                 const IID: $crate::GUID = $guid;
+                const IID_STR: &'static str = stringify!($guid);
             }
 
             $($shim_funcs)*
@@ -348,7 +364,7 @@ macro_rules! __kcom_define_interface {
                 compile_error!("async-com feature is required to use async methods in declare_com_interface!");
                 #[cfg(feature = "async-com")]
                 #[allow(non_snake_case)]
-                unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::__kcom_vtable_ret!($ret_ty)
@@ -407,7 +423,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -462,7 +478,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -517,7 +533,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -572,7 +588,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $ret_ty

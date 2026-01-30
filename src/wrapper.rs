@@ -1,41 +1,49 @@
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use alloc::boxed::Box;
+use alloc::alloc::handle_alloc_error;
+use core::alloc::Layout;
 use core::ffi::c_void;
+use core::mem::ManuallyDrop;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use crate::allocator::{Allocator, GlobalAllocator};
 use crate::iunknown::{GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, STATUS_NOINTERFACE, STATUS_SUCCESS};
 use crate::traits::{ComImpl, InterfaceVtable};
 
 #[repr(C)]
-struct NonDelegatingIUnknown<T, I>
+struct NonDelegatingIUnknown<T, I, A>
 where
     T: ComImpl<I>,
     I: InterfaceVtable,
+    A: Allocator + Send + Sync,
 {
     vtable: &'static IUnknownVtbl,
-    parent: *mut ComObject<T, I>,
+    parent: *mut ComObject<T, I, A>,
 }
 
 #[repr(C)]
-pub struct ComObject<T, I>
+pub struct ComObject<T, I, A = GlobalAllocator>
 where
     T: ComImpl<I>,
     I: InterfaceVtable,
+    A: Allocator + Send + Sync,
 {
     vtable: &'static I,
-    non_delegating_unknown: NonDelegatingIUnknown<T, I>,
+    non_delegating_unknown: NonDelegatingIUnknown<T, I, A>,
     ref_count: AtomicU32,
     outer_unknown: Option<*mut IUnknownVtbl>,
     pub inner: T,
+    alloc: ManuallyDrop<A>,
 }
 
-impl<T, I> ComObject<T, I>
+impl<T, I, A> ComObject<T, I, A>
 where
     T: ComImpl<I>,
     I: InterfaceVtable,
+    A: Allocator + Send + Sync,
 {
+    const LAYOUT: Layout = Layout::new::<Self>();
     const NON_DELEGATING_VTABLE: IUnknownVtbl = IUnknownVtbl {
         QueryInterface: Self::shim_non_delegating_query_interface,
         AddRef: Self::shim_non_delegating_add_ref,
@@ -55,20 +63,43 @@ where
     }
 
     #[inline]
-    pub fn new(inner: T) -> *mut c_void {
-        let obj = Box::new(Self {
-            vtable: T::VTABLE,
-            non_delegating_unknown: NonDelegatingIUnknown {
-                vtable: &Self::NON_DELEGATING_VTABLE,
-                parent: core::ptr::null_mut(),
-            },
-            ref_count: AtomicU32::new(1),
-            outer_unknown: None,
-            inner,
-        });
-        let ptr = Box::into_raw(obj);
-        Self::init_non_delegating_ptr(ptr);
-        ptr as *mut c_void
+    pub fn new_in(inner: T, alloc: A) -> *mut c_void {
+        let ptr = match Self::try_new_in(inner, alloc) {
+            Some(ptr) => ptr,
+            None => handle_alloc_error(Self::LAYOUT),
+        };
+        ptr
+    }
+
+    #[inline]
+    pub fn try_new_in(inner: T, alloc: A) -> Option<*mut c_void> {
+        let ptr = unsafe { alloc.alloc(Self::LAYOUT) } as *mut Self;
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            ptr.write(Self {
+                vtable: T::VTABLE,
+                non_delegating_unknown: NonDelegatingIUnknown {
+                    vtable: &Self::NON_DELEGATING_VTABLE,
+                    parent: core::ptr::null_mut(),
+                },
+                ref_count: AtomicU32::new(1),
+                outer_unknown: None,
+                inner,
+                alloc: ManuallyDrop::new(alloc),
+            });
+            Self::init_non_delegating_ptr(ptr);
+            Some(ptr as *mut c_void)
+        }
+    }
+
+    #[inline]
+    pub fn try_new_in_with_layout(inner: T, alloc: A, layout: Layout) -> Option<*mut c_void> {
+        if layout != Self::LAYOUT {
+            return None;
+        }
+        Self::try_new_in(inner, alloc)
     }
 
     /// Creates an aggregated COM object and returns the **non-delegating IUnknown** pointer.
@@ -80,20 +111,57 @@ where
     /// # Safety
     /// `outer_unknown` must point to a valid outer IUnknown vtable.
     #[inline]
-    pub fn new_aggregated(inner: T, outer_unknown: *mut IUnknownVtbl) -> *mut c_void {
-        let obj = Box::new(Self {
-            vtable: T::VTABLE,
-            non_delegating_unknown: NonDelegatingIUnknown {
-                vtable: &Self::NON_DELEGATING_VTABLE,
-                parent: core::ptr::null_mut(),
-            },
-            ref_count: AtomicU32::new(1),
-            outer_unknown: Some(outer_unknown),
-            inner,
-        });
-        let ptr = Box::into_raw(obj);
-        Self::init_non_delegating_ptr(ptr);
-        Self::non_delegating_ptr(ptr)
+    pub fn new_aggregated_in(
+        inner: T,
+        outer_unknown: *mut IUnknownVtbl,
+        alloc: A,
+    ) -> *mut c_void {
+        match Self::try_new_aggregated_in(inner, outer_unknown, alloc) {
+            Some(ptr) => ptr,
+            None => handle_alloc_error(Self::LAYOUT),
+        }
+    }
+
+    #[inline]
+    pub fn try_new_aggregated_in(
+        inner: T,
+        outer_unknown: *mut IUnknownVtbl,
+        alloc: A,
+    ) -> Option<*mut c_void> {
+        let ptr = unsafe { alloc.alloc(Self::LAYOUT) } as *mut Self;
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            ptr.write(Self {
+                vtable: T::VTABLE,
+                non_delegating_unknown: NonDelegatingIUnknown {
+                    vtable: &Self::NON_DELEGATING_VTABLE,
+                    parent: core::ptr::null_mut(),
+                },
+                ref_count: AtomicU32::new(1),
+                outer_unknown: Some(outer_unknown),
+                inner,
+                alloc: ManuallyDrop::new(alloc),
+            });
+            Self::init_non_delegating_ptr(ptr);
+            Some(Self::non_delegating_ptr(ptr))
+        }
+    }
+
+    #[inline]
+    pub fn is_aggregated(&self) -> bool {
+        self.outer_unknown.is_some()
+    }
+
+    #[inline]
+    pub fn inner_ref(&self) -> &T {
+        &self.inner
+    }
+
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut T {
+        &mut self.inner
     }
 
     #[inline(always)]
@@ -108,7 +176,7 @@ where
     /// # Safety
     /// `ptr` must be a valid pointer to a non-delegating IUnknown created by this crate.
     pub unsafe fn from_non_delegating<'a>(ptr: *mut c_void) -> &'a Self {
-        let unknown = unsafe { &*(ptr as *const NonDelegatingIUnknown<T, I>) };
+        let unknown = unsafe { &*(ptr as *const NonDelegatingIUnknown<T, I, A>) };
         unsafe { &*unknown.parent }
     }
 
@@ -139,9 +207,14 @@ where
 
         if count == 0 {
             core::sync::atomic::fence(Ordering::Acquire);
+            let ptr = this as *mut Self;
+            let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
+            let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
-                let _ = Box::from_raw(this as *mut Self);
+                core::ptr::drop_in_place(ptr);
+                alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }
+            drop(alloc);
         }
 
         count
@@ -203,9 +276,14 @@ where
 
         if count == 0 {
             core::sync::atomic::fence(Ordering::Acquire);
+            let ptr = wrapper as *const Self as *mut Self;
+            let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
+            let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
-                let _ = Box::from_raw(wrapper as *const Self as *mut Self);
+                core::ptr::drop_in_place(ptr);
+                alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }
+            drop(alloc);
         }
 
         count
@@ -245,6 +323,39 @@ where
 
         unsafe { *ppv = core::ptr::null_mut() };
         STATUS_NOINTERFACE
+    }
+}
+
+impl<T, I> ComObject<T, I, GlobalAllocator>
+where
+    T: ComImpl<I>,
+    I: InterfaceVtable,
+{
+    #[inline]
+    pub fn new(inner: T) -> *mut c_void {
+        Self::new_in(inner, GlobalAllocator)
+    }
+
+    #[inline]
+    pub fn try_new(inner: T) -> Option<*mut c_void> {
+        Self::try_new_in(inner, GlobalAllocator)
+    }
+
+    /// # Safety
+    /// `outer_unknown` must point to a valid outer IUnknown vtable.
+    #[inline]
+    pub fn new_aggregated(inner: T, outer_unknown: *mut IUnknownVtbl) -> *mut c_void {
+        Self::new_aggregated_in(inner, outer_unknown, GlobalAllocator)
+    }
+
+    /// # Safety
+    /// `outer_unknown` must point to a valid outer IUnknown vtable.
+    #[inline]
+    pub fn try_new_aggregated(
+        inner: T,
+        outer_unknown: *mut IUnknownVtbl,
+    ) -> Option<*mut c_void> {
+        Self::try_new_aggregated_in(inner, outer_unknown, GlobalAllocator)
     }
 }
 

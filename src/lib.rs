@@ -10,13 +10,15 @@ pub extern crate alloc;
 extern crate std;
 
 pub mod iunknown;
+pub mod allocator;
 #[cfg(feature = "async-com")]
 pub mod executor;
-pub mod descriptors;
 pub mod macros;
 pub mod smart_ptr;
 #[cfg(feature = "kernel-unicode")]
 pub mod unicode;
+#[cfg(any(feature = "async-com-kernel", feature = "kernel-unicode"))]
+pub mod ntddk;
 pub mod traits;
 pub mod wrapper;
 
@@ -42,6 +44,86 @@ macro_rules! impl_com_object {
             #[inline]
             pub fn new_com(inner: Self) -> *mut core::ffi::c_void {
                 $crate::wrapper::ComObject::<Self, $vtable>::new(inner)
+            }
+
+            #[inline]
+            pub fn new_com_in<A>(inner: Self, alloc: A) -> *mut core::ffi::c_void
+            where
+                A: $crate::allocator::Allocator + Send + Sync,
+            {
+                $crate::wrapper::ComObject::<Self, $vtable, A>::new_in(inner, alloc)
+            }
+
+            #[inline]
+            pub fn try_new_com(inner: Self) -> Option<*mut core::ffi::c_void> {
+                $crate::wrapper::ComObject::<Self, $vtable>::try_new(inner)
+            }
+
+            #[inline]
+            pub fn try_new_com_in<A>(inner: Self, alloc: A) -> Option<*mut core::ffi::c_void>
+            where
+                A: $crate::allocator::Allocator + Send + Sync,
+            {
+                $crate::wrapper::ComObject::<Self, $vtable, A>::try_new_in(inner, alloc)
+            }
+
+            /// # Safety
+            /// `outer_unknown` must point to a valid outer IUnknown vtable.
+            #[inline]
+            pub fn new_com_aggregated(
+                inner: Self,
+                outer_unknown: *mut $crate::IUnknownVtbl,
+            ) -> *mut core::ffi::c_void {
+                $crate::wrapper::ComObject::<Self, $vtable>::new_aggregated(inner, outer_unknown)
+            }
+
+            /// # Safety
+            /// `outer_unknown` must point to a valid outer IUnknown vtable.
+            #[inline]
+            pub fn new_com_aggregated_in<A>(
+                inner: Self,
+                outer_unknown: *mut $crate::IUnknownVtbl,
+                alloc: A,
+            ) -> *mut core::ffi::c_void
+            where
+                A: $crate::allocator::Allocator + Send + Sync,
+            {
+                $crate::wrapper::ComObject::<Self, $vtable, A>::new_aggregated_in(
+                    inner,
+                    outer_unknown,
+                    alloc,
+                )
+            }
+
+            /// # Safety
+            /// `outer_unknown` must point to a valid outer IUnknown vtable.
+            #[inline]
+            pub fn try_new_com_aggregated(
+                inner: Self,
+                outer_unknown: *mut $crate::IUnknownVtbl,
+            ) -> Option<*mut core::ffi::c_void> {
+                $crate::wrapper::ComObject::<Self, $vtable>::try_new_aggregated(
+                    inner,
+                    outer_unknown,
+                )
+            }
+
+            /// # Safety
+            /// `outer_unknown` must point to a valid outer IUnknown vtable.
+            #[inline]
+            pub fn try_new_com_aggregated_in<A>(
+                inner: Self,
+                outer_unknown: *mut $crate::IUnknownVtbl,
+                alloc: A,
+            ) -> Option<*mut core::ffi::c_void>
+            where
+                A: $crate::allocator::Allocator + Send + Sync,
+            {
+                $crate::wrapper::ComObject::<Self, $vtable, A>::try_new_aggregated_in(
+                    inner,
+                    outer_unknown,
+                    alloc,
+                )
             }
         }
     };

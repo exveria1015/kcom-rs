@@ -15,7 +15,7 @@ use core::task::{Context, Poll, Waker};
 ))]
 mod kernel {
     use super::*;
-    use wdk_sys::ntddk::{
+    use crate::ntddk::{
         KeGetCurrentIrql, KeInitializeEvent, KeSetEvent, KeWaitForSingleObject, KEVENT,
         KWAIT_REASON, SynchronizationEvent, APC_LEVEL, _MODE,
     };

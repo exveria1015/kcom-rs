@@ -45,6 +45,25 @@ impl<T: ComInterface> ComRc<T> {
         })
     }
 
+    /// Takes ownership of a raw COM pointer without calling `AddRef`.
+    ///
+    /// # Safety
+    /// `ptr` must be a valid COM interface pointer.
+    pub unsafe fn try_from_raw(ptr: *mut T) -> Option<Self> {
+        Self::from_raw(ptr)
+    }
+
+    /// Takes ownership of a non-null raw COM pointer without calling `AddRef`.
+    ///
+    /// # Safety
+    /// `ptr` must be a valid, non-null COM interface pointer.
+    pub unsafe fn from_raw_unchecked(ptr: *mut T) -> Self {
+        Self {
+            ptr: NonNull::new_unchecked(ptr),
+            _phantom: PhantomData,
+        }
+    }
+
     /// Takes ownership of a raw COM pointer or returns `Status::NOINTERFACE` if null.
     ///
     /// # Safety
