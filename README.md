@@ -11,6 +11,7 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - **Result -> NTSTATUS** mapping in shims
 - **Optional async support (Experimental)** with a blocking executor
 - **QueryInterface helper macro** for multi-interface support
+- **Multiple non-primary interfaces** via `ComObjectN` + `impl_com_interface_multiple!`
 - **Reference-counted ComRc** smart pointer for client-side COM usage
 - **Kernel Unicode helpers** for `UNICODE_STRING`
 
@@ -86,6 +87,48 @@ non-primary interfaces so the returned pointer’s vtable matches the requested 
 
 Use `new_com_rc::<IFooRaw>` (or `new_com_rc_in`) to receive a `ComRc` that owns the initial
 reference. `new_com` still returns a raw pointer with refcount 1.
+
+## Multiple interfaces (non-primary vtables)
+
+Use `ComObjectN` when you need a primary interface plus multiple non-primary interfaces. The
+`secondaries` tuple declares the vtable order, and `index` selects the 0-based position.
+
+```rust
+use kcom::{impl_com_interface, impl_com_interface_multiple, IUnknownVtbl};
+use kcom::wrapper::ComObjectN;
+
+impl_com_interface! {
+    impl Multi: IFoo {
+        parent = IUnknownVtbl,
+        methods = [foo],
+    }
+}
+
+impl_com_interface_multiple! {
+    impl Multi: IBar {
+        parent = IUnknownVtbl,
+        primary = IFooVtbl,
+        index = 0,
+        secondaries = (IBarVtbl, IBazVtbl),
+        methods = [bar],
+    }
+}
+
+impl_com_interface_multiple! {
+    impl Multi: IBaz {
+        parent = IUnknownVtbl,
+        primary = IFooVtbl,
+        index = 1,
+        secondaries = (IBarVtbl, IBazVtbl),
+        methods = [baz],
+    }
+}
+
+let obj_ptr = raw as *mut ComObjectN<Multi, IFooVtbl, (IBarVtbl, IBazVtbl)>;
+let bar_ptr = unsafe {
+    ComObjectN::<Multi, IFooVtbl, (IBarVtbl, IBazVtbl)>::secondary_ptr::<IBarVtbl, 0>(obj_ptr)
+};
+```
 
 ## Usage (async interface)
 

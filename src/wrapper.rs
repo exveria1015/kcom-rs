@@ -25,11 +25,12 @@ where
     parent: *mut ComObject<T, I, A>,
 }
 
-impl<T, P, S> ComObject2<T, P, S, GlobalAllocator>
+impl<T, P, S> ComObjectN<T, P, S, GlobalAllocator>
 where
-    T: ComImpl<P> + ComImpl<S>,
+    T: ComImpl<P> + SecondaryComImpl<S>,
     P: InterfaceVtable,
-    S: InterfaceVtable,
+    S: SecondaryVtables,
+    S::Entries: SecondaryList,
 {
     #[inline]
     pub fn new(inner: T) -> Result<*mut c_void, NTSTATUS> {
@@ -61,48 +62,165 @@ where
 }
 
 #[repr(C)]
-struct InterfaceEntry<I, O>
+pub struct InterfaceEntryN<I>
 where
     I: InterfaceVtable,
 {
     vtable: &'static I,
-    parent: *mut O,
+    parent: *mut c_void,
 }
 
-#[repr(C)]
-struct NonDelegatingIUnknown2<T, P, S, A>
+pub trait SecondaryList {
+    fn init(&mut self, parent: *mut c_void);
+}
+
+pub trait SecondaryEntryAccess<const INDEX: usize, I>
 where
-    T: ComImpl<P> + ComImpl<S>,
+    I: InterfaceVtable,
+{
+    fn entry(&mut self) -> *mut InterfaceEntryN<I>;
+
+    #[inline]
+    unsafe fn parent_from_ptr(ptr: *mut c_void) -> *mut c_void {
+        unsafe { (*(ptr as *mut InterfaceEntryN<I>)).parent }
+    }
+}
+
+pub trait SecondaryComImpl<S>
+where
+    S: SecondaryVtables,
+{
+    fn secondary_entries() -> S::Entries;
+}
+
+pub trait SecondaryVtables
+where
+    Self: Sized,
+{
+    type Entries: SecondaryList;
+
+    fn entries<T>() -> Self::Entries
+    where
+        T: SecondaryComImpl<Self>,
+    {
+        T::secondary_entries()
+    }
+}
+
+impl SecondaryList for () {
+    #[inline]
+    fn init(&mut self, _parent: *mut c_void) {}
+}
+
+macro_rules! impl_secondary_entry_access {
+    ($name:ident, $index:tt, $($all:ident),+) => {
+        impl<$($all),+> SecondaryEntryAccess<$index, $name> for ($(InterfaceEntryN<$all>,)+)
+        where
+            $($all: InterfaceVtable,)+
+        {
+            #[inline]
+            fn entry(&mut self) -> *mut InterfaceEntryN<$name> {
+                &mut self.$index
+            }
+        }
+    };
+}
+
+macro_rules! impl_secondary_entry_access_all {
+    (($name:ident : $index:tt, $($rest:ident : $rest_index:tt),+); ($($all:ident),+)) => {
+        impl_secondary_entry_access!($name, $index, $($all),+);
+        impl_secondary_entry_access_all!(($($rest : $rest_index),+); ($($all),+));
+    };
+    (($name:ident : $index:tt); ($($all:ident),+)) => {
+        impl_secondary_entry_access!($name, $index, $($all),+);
+    };
+}
+
+macro_rules! impl_secondary_tuple {
+    ($(($len:tt, $($name:ident : $index:tt),+)),+ $(,)?) => {
+        $(
+            impl<$($name),+> SecondaryVtables for ($($name,)+)
+            where
+                $($name: InterfaceVtable,)+
+            {
+                type Entries = ($(InterfaceEntryN<$name>,)+);
+            }
+
+            impl<$($name),+> SecondaryList for ($(InterfaceEntryN<$name>,)+)
+            where
+                $($name: InterfaceVtable,)+
+            {
+                #[inline]
+                fn init(&mut self, parent: *mut c_void) {
+                    $(self.$index.parent = parent;)+
+                }
+            }
+
+            impl<T, $($name),+> SecondaryComImpl<($($name,)+)> for T
+            where
+                $($name: InterfaceVtable,)+
+                $(T: ComImpl<$name>,)+
+            {
+                #[inline]
+                fn secondary_entries() -> <($($name,)+) as SecondaryVtables>::Entries {
+                    ($(
+                        InterfaceEntryN {
+                            vtable: <T as ComImpl<$name>>::VTABLE,
+                            parent: core::ptr::null_mut(),
+                        },
+                    )+)
+                }
+            }
+
+            impl_secondary_entry_access_all!(($($name : $index),+); ($($name),+));
+        )+
+    };
+}
+
+impl_secondary_tuple!((1, S1: 0));
+impl_secondary_tuple!((2, S1: 0, S2: 1));
+impl_secondary_tuple!((3, S1: 0, S2: 1, S3: 2));
+impl_secondary_tuple!((4, S1: 0, S2: 1, S3: 2, S4: 3));
+impl_secondary_tuple!((5, S1: 0, S2: 1, S3: 2, S4: 3, S5: 4));
+impl_secondary_tuple!((6, S1: 0, S2: 1, S3: 2, S4: 3, S5: 4, S6: 5));
+impl_secondary_tuple!((7, S1: 0, S2: 1, S3: 2, S4: 3, S5: 4, S6: 5, S7: 6));
+impl_secondary_tuple!((8, S1: 0, S2: 1, S3: 2, S4: 3, S5: 4, S6: 5, S7: 6, S8: 7));
+
+#[repr(C)]
+struct NonDelegatingIUnknownN<T, P, S, A>
+where
+    T: ComImpl<P> + SecondaryComImpl<S>,
     P: InterfaceVtable,
-    S: InterfaceVtable,
+    S: SecondaryVtables,
     A: Allocator + Send + Sync,
 {
     vtable: &'static IUnknownVtbl,
-    parent: *mut ComObject2<T, P, S, A>,
+    parent: *mut ComObjectN<T, P, S, A>,
 }
 
 #[repr(C)]
-pub struct ComObject2<T, P, S, A = GlobalAllocator>
+pub struct ComObjectN<T, P, S, A = GlobalAllocator>
 where
-    T: ComImpl<P> + ComImpl<S>,
+    T: ComImpl<P> + SecondaryComImpl<S>,
     P: InterfaceVtable,
-    S: InterfaceVtable,
+    S: SecondaryVtables,
     A: Allocator + Send + Sync,
 {
     vtable: &'static P,
-    secondary: InterfaceEntry<S, ComObject2<T, P, S, A>>,
-    non_delegating_unknown: NonDelegatingIUnknown2<T, P, S, A>,
+    secondaries: S::Entries,
+    non_delegating_unknown: NonDelegatingIUnknownN<T, P, S, A>,
     ref_count: AtomicU32,
     outer_unknown: Option<*mut IUnknownVtbl>,
     pub inner: T,
     alloc: ManuallyDrop<A>,
 }
 
-impl<T, P, S, A> ComObject2<T, P, S, A>
+impl<T, P, S, A> ComObjectN<T, P, S, A>
 where
-    T: ComImpl<P> + ComImpl<S>,
+    T: ComImpl<P> + SecondaryComImpl<S>,
     P: InterfaceVtable,
-    S: InterfaceVtable,
+    S: SecondaryVtables,
+    S::Entries: SecondaryList,
     A: Allocator + Send + Sync,
 {
     const LAYOUT: Layout = Layout::new::<Self>();
@@ -122,18 +240,26 @@ where
     #[inline]
     fn init_secondary_ptr(ptr: *mut Self) {
         unsafe {
-            (*ptr).secondary.parent = ptr;
+            (*ptr).secondaries.init(ptr as *mut c_void);
         }
     }
 
     #[inline]
-    pub unsafe fn secondary_ptr(ptr: *mut Self) -> *mut c_void {
-        unsafe { &mut (*ptr).secondary as *mut _ as *mut c_void }
+    pub unsafe fn secondary_ptr<I, const INDEX: usize>(ptr: *mut Self) -> *mut c_void
+    where
+        I: InterfaceVtable,
+        S::Entries: SecondaryEntryAccess<INDEX, I>,
+    {
+        unsafe {
+            <S::Entries as SecondaryEntryAccess<INDEX, I>>::entry(&mut (*ptr).secondaries)
+                as *mut _
+                as *mut c_void
+        }
     }
 
     #[inline(always)]
     /// # Safety
-    /// `ptr` must be a valid pointer to a `ComObject2<T, P, S>` allocated by this crate.
+    /// `ptr` must be a valid pointer to a `ComObjectN<T, P, S>` allocated by this crate.
     pub unsafe fn from_ptr<'a>(ptr: *mut c_void) -> &'a Self {
         unsafe { &*(ptr as *const Self) }
     }
@@ -141,9 +267,13 @@ where
     #[inline(always)]
     /// # Safety
     /// `ptr` must be a valid pointer to the secondary interface entry for this object.
-    pub unsafe fn from_secondary_ptr<'a>(ptr: *mut c_void) -> &'a Self {
-        let entry = ptr as *const InterfaceEntry<S, Self>;
-        unsafe { &*(*entry).parent }
+    pub unsafe fn from_secondary_ptr<'a, I, const INDEX: usize>(ptr: *mut c_void) -> &'a Self
+    where
+        I: InterfaceVtable,
+        S::Entries: SecondaryEntryAccess<INDEX, I>,
+    {
+        let parent = unsafe { <S::Entries as SecondaryEntryAccess<INDEX, I>>::parent_from_ptr(ptr) };
+        unsafe { &*(parent as *const Self) }
     }
 
     #[inline]
@@ -177,11 +307,8 @@ where
         unsafe {
             ptr.write(Self {
                 vtable: <T as ComImpl<P>>::VTABLE,
-                secondary: InterfaceEntry {
-                    vtable: <T as ComImpl<S>>::VTABLE,
-                    parent: core::ptr::null_mut(),
-                },
-                non_delegating_unknown: NonDelegatingIUnknown2 {
+                secondaries: S::entries::<T>(),
+                non_delegating_unknown: NonDelegatingIUnknownN {
                     vtable: &Self::NON_DELEGATING_VTABLE,
                     parent: core::ptr::null_mut(),
                 },
@@ -198,7 +325,7 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid COM pointer created by `ComObject2` for `T`.
+    /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_add_ref(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_ptr(this) };
         if let Some(outer) = wrapper.outer_unknown {
@@ -211,7 +338,7 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid COM pointer created by `ComObject2` for `T`.
+    /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_release(this: *mut c_void) -> u32 {
         let wrapper = unsafe { &*(this as *const Self) };
         if let Some(outer) = wrapper.outer_unknown {
@@ -238,7 +365,7 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid COM pointer created by `ComObject2` for `T`.
+    /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
     /// `riid` and `ppv` must be valid, non-null pointers.
     pub unsafe extern "system" fn shim_query_interface(
         this: *mut c_void,
@@ -277,9 +404,15 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid COM pointer created by `ComObject2` for `T`.
-    pub unsafe extern "system" fn shim_add_ref_secondary(this: *mut c_void) -> u32 {
-        let wrapper = unsafe { Self::from_secondary_ptr(this) };
+    /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
+    pub unsafe extern "system" fn shim_add_ref_secondary<I, const INDEX: usize>(
+        this: *mut c_void,
+    ) -> u32
+    where
+        I: InterfaceVtable,
+        S::Entries: SecondaryEntryAccess<INDEX, I>,
+    {
+        let wrapper = unsafe { Self::from_secondary_ptr::<I, INDEX>(this) };
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
                 return unsafe { ((*outer).AddRef)(outer as *mut c_void) };
@@ -290,22 +423,32 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid COM pointer created by `ComObject2` for `T`.
-    pub unsafe extern "system" fn shim_release_secondary(this: *mut c_void) -> u32 {
-        let wrapper = unsafe { Self::from_secondary_ptr(this) };
+    /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
+    pub unsafe extern "system" fn shim_release_secondary<I, const INDEX: usize>(
+        this: *mut c_void,
+    ) -> u32
+    where
+        I: InterfaceVtable,
+        S::Entries: SecondaryEntryAccess<INDEX, I>,
+    {
+        let wrapper = unsafe { Self::from_secondary_ptr::<I, INDEX>(this) };
         let primary = wrapper as *const _ as *mut c_void;
         unsafe { Self::shim_release(primary) }
     }
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid COM pointer created by `ComObject2` for `T`.
-    pub unsafe extern "system" fn shim_query_interface_secondary(
+    /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
+    pub unsafe extern "system" fn shim_query_interface_secondary<I, const INDEX: usize>(
         this: *mut c_void,
         riid: *const GUID,
         ppv: *mut *mut c_void,
-    ) -> NTSTATUS {
-        let wrapper = unsafe { Self::from_secondary_ptr(this) };
+    ) -> NTSTATUS
+    where
+        I: InterfaceVtable,
+        S::Entries: SecondaryEntryAccess<INDEX, I>,
+    {
+        let wrapper = unsafe { Self::from_secondary_ptr::<I, INDEX>(this) };
         let primary = wrapper as *const _ as *mut c_void;
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
@@ -338,7 +481,7 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject2` for `T`.
+    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_add_ref(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_non_delegating(this) };
         wrapper.ref_count.fetch_add(1, Ordering::Relaxed) + 1
@@ -346,7 +489,7 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject2` for `T`.
+    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_non_delegating(this) };
         let count = wrapper.ref_count.fetch_sub(1, Ordering::Release) - 1;
@@ -368,7 +511,7 @@ where
 
     #[allow(non_snake_case)]
     /// # Safety
-    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject2` for `T`.
+    /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_query_interface(
         this: *mut c_void,
         riid: *const GUID,
@@ -403,7 +546,7 @@ where
     /// # Safety
     /// `ptr` must be a valid pointer to a non-delegating IUnknown created by this crate.
     unsafe fn from_non_delegating<'a>(ptr: *mut c_void) -> &'a Self {
-        let unknown = unsafe { &*(ptr as *const NonDelegatingIUnknown2<T, P, S, A>) };
+        let unknown = unsafe { &*(ptr as *const NonDelegatingIUnknownN<T, P, S, A>) };
         unsafe { &*unknown.parent }
     }
 }

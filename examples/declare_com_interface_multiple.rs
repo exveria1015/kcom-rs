@@ -1,10 +1,10 @@
 use core::ffi::c_void;
 
 use kcom::{
-    declare_com_interface, impl_com_interface, impl_com_interface_secondary, GUID, IUnknownVtbl,
+    declare_com_interface, impl_com_interface, impl_com_interface_multiple, GUID, IUnknownVtbl,
     NTSTATUS, STATUS_SUCCESS,
 };
-use kcom::wrapper::ComObject2;
+use kcom::wrapper::ComObjectN;
 
 declare_com_interface! {
     /// Primary interface.
@@ -55,19 +55,23 @@ impl_com_interface! {
     }
 }
 
-impl_com_interface_secondary! {
+impl_com_interface_multiple! {
     impl Multi: IBar {
         parent = IUnknownVtbl,
         primary = IFooVtbl,
+        index = 0,
+        secondaries = (IBarVtbl,),
         methods = [bar],
     }
 }
 
 fn main() {
-    let raw = ComObject2::<Multi, IFooVtbl, IBarVtbl>::new(Multi).unwrap();
+    let raw = ComObjectN::<Multi, IFooVtbl, (IBarVtbl,)>::new(Multi).unwrap();
     let foo_ptr = raw as *mut IFooRaw;
-    let obj_ptr = raw as *mut ComObject2<Multi, IFooVtbl, IBarVtbl>;
-    let bar_ptr = unsafe { ComObject2::<Multi, IFooVtbl, IBarVtbl>::secondary_ptr(obj_ptr) } as *mut IBarRaw;
+    let obj_ptr = raw as *mut ComObjectN<Multi, IFooVtbl, (IBarVtbl,)>;
+    let bar_ptr = unsafe {
+        ComObjectN::<Multi, IFooVtbl, (IBarVtbl,)>::secondary_ptr::<IBarVtbl, 0>(obj_ptr)
+    } as *mut IBarRaw;
 
     unsafe {
         let foo_vtbl = (*foo_ptr).lpVtbl;
@@ -75,6 +79,6 @@ fn main() {
         assert_eq!(((*foo_vtbl).foo)(foo_ptr as *mut c_void, 1), STATUS_SUCCESS);
         assert_eq!(((*bar_vtbl).bar)(bar_ptr as *mut c_void, 2), STATUS_SUCCESS);
 
-        ComObject2::<Multi, IFooVtbl, IBarVtbl>::shim_release(raw);
+        ComObjectN::<Multi, IFooVtbl, (IBarVtbl,)>::shim_release(raw);
     }
 }

@@ -40,7 +40,7 @@ pub use allocator::{
 pub use allocator::{init_box_with_tag, KernelInitBox, PoolType, WdkAllocator};
 #[cfg(feature = "kernel-unicode")]
 pub use unicode::{unicode_string_as_slice, unicode_string_to_string, OwnedUnicodeString, UnicodeStringError};
-pub use wrapper::ComObject;
+pub use wrapper::{ComObject, ComObjectN};
 
 #[macro_export]
 macro_rules! impl_com_object {
