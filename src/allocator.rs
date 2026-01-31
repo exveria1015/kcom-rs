@@ -16,7 +16,7 @@ use wdk_sys::ntddk::{KeGetCurrentIrql, MmGetSystemRoutineAddress};
 #[cfg(feature = "driver")]
 use wdk_sys::{UNICODE_STRING, PASSIVE_LEVEL};
 
-use crate::iunknown::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES};
+use crate::iunknown::{NTSTATUS, Status, STATUS_INSUFFICIENT_RESOURCES};
 
 pub trait Allocator {
     /// # Safety
@@ -76,6 +76,26 @@ where
     }
 }
 
+impl<E> From<KBoxError<E>> for NTSTATUS
+where
+    E: Into<NTSTATUS>,
+{
+    #[inline]
+    fn from(err: KBoxError<E>) -> Self {
+        err.into_status()
+    }
+}
+
+impl<E> From<KBoxError<E>> for Status
+where
+    E: Into<NTSTATUS>,
+{
+    #[inline]
+    fn from(err: KBoxError<E>) -> Self {
+        Status::from(err.into_status())
+    }
+}
+
 pub trait PinInit<T, E> {
     /// # Safety
     /// `ptr` must be valid for writes and aligned for `T`.
@@ -95,11 +115,14 @@ impl<F> PinInitOnce<F> {
 
 impl<T, E, F> PinInit<T, E> for PinInitOnce<F>
 where
+    E: From<NTSTATUS>,
     F: FnOnce(*mut T) -> Result<(), E>,
 {
     #[inline]
     unsafe fn init(&mut self, ptr: *mut T) -> Result<(), E> {
-        let init = self.init.take().expect("PinInitOnce called twice");
+        let Some(init) = self.init.take() else {
+            return Err(E::from(crate::iunknown::STATUS_UNSUCCESSFUL));
+        };
         init(ptr)
     }
 }
@@ -133,8 +156,11 @@ impl<T, A: Allocator> KBox<T, A> {
         Ok(unsafe { Pin::new_unchecked(Self::from_raw_parts(ptr, alloc, layout)) })
     }
 
+    /// # Safety
+    /// Caller must ensure `ptr` was allocated with `alloc` using `layout` and is
+    /// a valid instance of `T` that can be dropped.
     #[inline]
-    fn from_raw_parts(ptr: NonNull<T>, alloc: A, layout: Layout) -> Self {
+    pub(crate) unsafe fn from_raw_parts(ptr: NonNull<T>, alloc: A, layout: Layout) -> Self {
         Self {
             ptr,
             alloc: ManuallyDrop::new(alloc),
@@ -285,13 +311,18 @@ impl Allocator for WdkAllocator {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
 
-        let ptr = unsafe { ex_allocate_pool(self.pool, layout.size(), self.tag) };
+        let ptr = unsafe { ex_allocate_pool_uninitialized(self.pool, layout.size(), self.tag) };
         ptr as *mut u8
     }
 
     #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        unsafe { self.alloc(layout) }
+        if layout.size() == 0 {
+            return core::ptr::NonNull::<u8>::dangling().as_ptr();
+        }
+
+        let ptr = unsafe { ex_allocate_pool(self.pool, layout.size(), self.tag) };
+        ptr as *mut u8
     }
 
     #[inline]

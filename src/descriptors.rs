@@ -22,8 +22,17 @@
 //! - `pcnode_descriptor!` -> `PCNODE_DESCRIPTOR`
 //! - `pcconnection_descriptor!` -> `PCCONNECTION_DESCRIPTOR`
 //! - `define_descriptor!` -> `PCFILTER_DESCRIPTOR`
-//!   - arrays are emitted as internal `const` slices; empty lists map to
+//!   - arrays are emitted as internal `static` arrays; empty lists map to
 //!     null pointers with count fields set to zero.
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __kcom_count_exprs {
+    ($($expr:expr),* $(,)?) => {
+        <[()]>::len(&[$($crate::__kcom_count_exprs!(@unit $expr)),*])
+    };
+    (@unit $expr:expr) => { () };
+}
 
 /// Builds a `PCPIN_DESCRIPTOR` value.
 ///
@@ -194,9 +203,11 @@ macro_rules! pcautomation_table {
         events: $event_ty:ty => [$($events:expr),* $(,)?],
         $(,)?
     ) => {{
-        const PROPERTIES: &[$property_ty] = &[$($properties),*];
-        const METHODS: &[$method_ty] = &[$($methods),*];
-        const EVENTS: &[$event_ty] = &[$($events),*];
+        static PROPERTIES: [$property_ty; $crate::__kcom_count_exprs!($($properties),*)] = [
+            $($properties),*
+        ];
+        static METHODS: [$method_ty; $crate::__kcom_count_exprs!($($methods),*)] = [$($methods),*];
+        static EVENTS: [$event_ty; $crate::__kcom_count_exprs!($($events),*)] = [$($events),*];
 
         PCAUTOMATION_TABLE {
             PropertyItemSize: ::core::mem::size_of::<$property_ty>() as _,
@@ -282,10 +293,16 @@ macro_rules! kspin_descriptor {
         constrained_data_ranges: $constrained_ty:ty => [$($constrained:expr),* $(,)?],
         $(,)?
     ) => {{
-        const IFACES: &[$iface_ty] = &[$($interfaces),*];
-        const MEDIUMS: &[$medium_ty] = &[$($mediums),*];
-        const RANGES: &[$range_ty] = &[$($ranges),*];
-        const CONSTRAINED: &[$constrained_ty] = &[$($constrained),*];
+        static IFACES: [$iface_ty; $crate::__kcom_count_exprs!($($interfaces),*)] = [
+            $($interfaces),*
+        ];
+        static MEDIUMS: [$medium_ty; $crate::__kcom_count_exprs!($($mediums),*)] = [
+            $($mediums),*
+        ];
+        static RANGES: [$range_ty; $crate::__kcom_count_exprs!($($ranges),*)] = [$($ranges),*];
+        static CONSTRAINED: [$constrained_ty; $crate::__kcom_count_exprs!($($constrained),*)] = [
+            $($constrained),*
+        ];
 
         KSPIN_DESCRIPTOR {
             InterfacesCount: IFACES.len() as _,
@@ -332,9 +349,13 @@ macro_rules! kspin_descriptor {
         name: $name:expr
         $(,)?
     ) => {{
-        const IFACES: &[$iface_ty] = &[$($interfaces),*];
-        const MEDIUMS: &[$medium_ty] = &[$($mediums),*];
-        const RANGES: &[$range_ty] = &[$($ranges),*];
+        static IFACES: [$iface_ty; $crate::__kcom_count_exprs!($($interfaces),*)] = [
+            $($interfaces),*
+        ];
+        static MEDIUMS: [$medium_ty; $crate::__kcom_count_exprs!($($mediums),*)] = [
+            $($mediums),*
+        ];
+        static RANGES: [$range_ty; $crate::__kcom_count_exprs!($($ranges),*)] = [$($ranges),*];
 
         KSPIN_DESCRIPTOR {
             InterfacesCount: IFACES.len() as _,
@@ -424,10 +445,18 @@ macro_rules! define_descriptor {
         };
     ) => {
         $crate::paste::paste! {
-            const [<__KCOM_ $name _PINS>]: &[$pin_ty] = &[$($pins),*];
-            const [<__KCOM_ $name _NODES>]: &[$node_ty] = &[$($nodes),*];
-            const [<__KCOM_ $name _CONNECTIONS>]: &[$connection_ty] = &[$($connections),*];
-            const [<__KCOM_ $name _CATEGORIES>]: &[$category_ty] = &[$($categories),*];
+            static [<__KCOM_ $name _PINS>]: [$pin_ty; $crate::__kcom_count_exprs!($($pins),*)] = [
+                $($pins),*
+            ];
+            static [<__KCOM_ $name _NODES>]: [$node_ty; $crate::__kcom_count_exprs!($($nodes),*)] = [
+                $($nodes),*
+            ];
+            static [<__KCOM_ $name _CONNECTIONS>]: [$connection_ty; $crate::__kcom_count_exprs!($($connections),*)] = [
+                $($connections),*
+            ];
+            static [<__KCOM_ $name _CATEGORIES>]: [$category_ty; $crate::__kcom_count_exprs!($($categories),*)] = [
+                $($categories),*
+            ];
 
             $(#[$attr])*
             $vis static $name: $filter_ty = $filter_ty {

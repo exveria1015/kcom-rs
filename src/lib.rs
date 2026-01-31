@@ -11,10 +11,10 @@ extern crate std;
 
 pub mod iunknown;
 pub mod allocator;
-#[cfg(feature = "async-com")]
 pub mod executor;
 pub mod macros;
 pub mod smart_ptr;
+pub mod task;
 #[cfg(feature = "kernel-unicode")]
 pub mod unicode;
 #[cfg(any(feature = "async-com-kernel", feature = "kernel-unicode"))]
@@ -41,6 +41,22 @@ pub use allocator::{init_box_with_tag, init_ex_allocate_pool2, KernelInitBox, Po
 #[cfg(feature = "kernel-unicode")]
 pub use unicode::{unicode_string_as_slice, unicode_string_to_string, OwnedUnicodeString, UnicodeStringError};
 pub use wrapper::{ComObject, ComObjectN};
+
+pub use executor::{spawn_cancellable_task, CancelHandle, spawn_task};
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+pub use executor::{set_task_alloc_tag, spawn_cancellable_task_tracked, spawn_task_tracked, TaskTracker};
+pub use task::{try_finally, Cancellable};
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+pub use executor::KernelTimerFuture;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+pub use executor::{
+    spawn_work_item_task,
+    spawn_work_item_task_cancellable,
+    spawn_work_item_task_cancellable_tracked,
+    spawn_work_item_task_tracked,
+    WorkItemCancelHandle,
+    WorkItemTracker,
+};
 
 #[macro_export]
 macro_rules! impl_com_object {

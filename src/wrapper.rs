@@ -14,6 +14,43 @@ use crate::iunknown::{
 use crate::smart_ptr::{ComInterface, ComRc};
 use crate::traits::{ComImpl, ComInterfaceInfo, InterfaceVtable};
 
+#[inline]
+unsafe fn delegating_add_ref(
+    outer_unknown: Option<*mut IUnknownVtbl>,
+    ref_count: &AtomicU32,
+) -> u32 {
+    if let Some(outer) = outer_unknown {
+        if !outer.is_null() {
+            return unsafe { ((*outer).AddRef)(outer as *mut c_void) };
+        }
+    }
+    ref_count.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+#[inline]
+unsafe fn delegating_release<F>(
+    outer_unknown: Option<*mut IUnknownVtbl>,
+    ref_count: &AtomicU32,
+    release_inner: F,
+) -> u32
+where
+    F: FnOnce(),
+{
+    if let Some(outer) = outer_unknown {
+        if !outer.is_null() {
+            return unsafe { ((*outer).Release)(outer as *mut c_void) };
+        }
+    }
+
+    let count = ref_count.fetch_sub(1, Ordering::Release) - 1;
+    if count == 0 {
+        core::sync::atomic::fence(Ordering::Acquire);
+        release_inner();
+    }
+
+    count
+}
+
 #[repr(C)]
 struct NonDelegatingIUnknown<T, I, A>
 where
@@ -260,6 +297,8 @@ where
     #[inline(always)]
     /// # Safety
     /// `ptr` must be a valid pointer to a `ComObjectN<T, P, S>` allocated by this crate.
+    /// The returned reference is only valid while `ptr` remains a valid allocation and must
+    /// not be stored beyond that lifetime.
     pub unsafe fn from_ptr<'a>(ptr: *mut c_void) -> &'a Self {
         unsafe { &*(ptr as *const Self) }
     }
@@ -267,6 +306,8 @@ where
     #[inline(always)]
     /// # Safety
     /// `ptr` must be a valid pointer to the secondary interface entry for this object.
+    /// The returned reference is only valid while the underlying COM object allocation
+    /// remains alive.
     pub unsafe fn from_secondary_ptr<'a, I, const INDEX: usize>(ptr: *mut c_void) -> &'a Self
     where
         I: InterfaceVtable,
@@ -328,12 +369,7 @@ where
     /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_add_ref(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_ptr(this) };
-        if let Some(outer) = wrapper.outer_unknown {
-            if !outer.is_null() {
-                return unsafe { ((*outer).AddRef)(outer as *mut c_void) };
-            }
-        }
-        wrapper.ref_count.fetch_add(1, Ordering::Relaxed) + 1
+        delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count)
     }
 
     #[allow(non_snake_case)]
@@ -341,26 +377,14 @@ where
     /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_release(this: *mut c_void) -> u32 {
         let wrapper = unsafe { &*(this as *const Self) };
-        if let Some(outer) = wrapper.outer_unknown {
-            if !outer.is_null() {
-                return unsafe { ((*outer).Release)(outer as *mut c_void) };
-            }
-        }
-        let count = wrapper.ref_count.fetch_sub(1, Ordering::Release) - 1;
-
-        if count == 0 {
-            core::sync::atomic::fence(Ordering::Acquire);
+        delegating_release(wrapper.outer_unknown, &wrapper.ref_count, || {
             let ptr = this as *mut Self;
-            let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
+            let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
-            unsafe {
-                core::ptr::drop_in_place(ptr);
-                alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
-            }
+            core::ptr::drop_in_place(&mut (*ptr).inner);
+            alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
-        }
-
-        count
+        })
     }
 
     #[allow(non_snake_case)]
@@ -413,12 +437,7 @@ where
         S::Entries: SecondaryEntryAccess<INDEX, I>,
     {
         let wrapper = unsafe { Self::from_secondary_ptr::<I, INDEX>(this) };
-        if let Some(outer) = wrapper.outer_unknown {
-            if !outer.is_null() {
-                return unsafe { ((*outer).AddRef)(outer as *mut c_void) };
-            }
-        }
-        wrapper.ref_count.fetch_add(1, Ordering::Relaxed) + 1
+        delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count)
     }
 
     #[allow(non_snake_case)]
@@ -463,7 +482,7 @@ where
         let riid = unsafe { &*riid };
 
         if *riid == IID_IUNKNOWN {
-unsafe { Self::shim_add_ref_secondary::<I, INDEX>(this) };
+            unsafe { Self::shim_add_ref(primary) };
             unsafe { *ppv = primary };
             return STATUS_SUCCESS;
         }
@@ -500,7 +519,7 @@ unsafe { Self::shim_add_ref_secondary::<I, INDEX>(this) };
             let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
-                core::ptr::drop_in_place(ptr);
+                core::ptr::drop_in_place(&mut (*ptr).inner);
                 alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }
             drop(alloc);
@@ -711,6 +730,7 @@ where
     /// # Safety
     /// `ptr` must be a valid pointer to a `ComObject<T, I>` allocated by this crate.
     /// The pointer must be properly aligned and remain valid for the returned lifetime.
+    /// The returned reference must not outlive the underlying COM object allocation.
     pub unsafe fn from_ptr<'a>(ptr: *mut c_void) -> &'a Self {
         unsafe { &*(ptr as *const Self) }
     }
@@ -718,6 +738,7 @@ where
     #[inline(always)]
     /// # Safety
     /// `ptr` must be a valid pointer to a non-delegating IUnknown created by this crate.
+    /// The returned reference must not outlive the underlying COM object allocation.
     pub unsafe fn from_non_delegating<'a>(ptr: *mut c_void) -> &'a Self {
         let unknown = unsafe { &*(ptr as *const NonDelegatingIUnknown<T, I, A>) };
         unsafe { &*unknown.parent }
@@ -728,12 +749,7 @@ where
     /// `this` must be a valid COM pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_add_ref(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_ptr(this) };
-        if let Some(outer) = wrapper.outer_unknown {
-            if !outer.is_null() {
-                return unsafe { ((*outer).AddRef)(outer as *mut c_void) };
-            }
-        }
-        wrapper.ref_count.fetch_add(1, Ordering::Relaxed) + 1
+        delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count)
     }
 
     #[allow(non_snake_case)]
@@ -741,26 +757,14 @@ where
     /// `this` must be a valid COM pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_release(this: *mut c_void) -> u32 {
         let wrapper = unsafe { &*(this as *const Self) };
-        if let Some(outer) = wrapper.outer_unknown {
-            if !outer.is_null() {
-                return unsafe { ((*outer).Release)(outer as *mut c_void) };
-            }
-        }
-        let count = wrapper.ref_count.fetch_sub(1, Ordering::Release) - 1;
-
-        if count == 0 {
-            core::sync::atomic::fence(Ordering::Acquire);
+        delegating_release(wrapper.outer_unknown, &wrapper.ref_count, || {
             let ptr = this as *mut Self;
-            let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
+            let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
-            unsafe {
-                core::ptr::drop_in_place(ptr);
-                alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
-            }
+            core::ptr::drop_in_place(&mut (*ptr).inner);
+            alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
-        }
-
-        count
+        })
     }
 
     #[allow(non_snake_case)]
@@ -823,7 +827,7 @@ where
             let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
-                core::ptr::drop_in_place(ptr);
+                core::ptr::drop_in_place(&mut (*ptr).inner);
                 alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }
             drop(alloc);

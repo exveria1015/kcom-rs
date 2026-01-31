@@ -9,6 +9,7 @@ pub type NTSTATUS = i32;
 
 pub const STATUS_SUCCESS: NTSTATUS = 0;
 pub const STATUS_PENDING: NTSTATUS = 0x0000_0103u32 as i32;
+pub const STATUS_UNSUCCESSFUL: NTSTATUS = 0xC000_0001u32 as i32;
 pub const STATUS_NOT_SUPPORTED: NTSTATUS = 0xC000_00BBu32 as i32;
 pub const STATUS_NOINTERFACE: NTSTATUS = 0xC000_02B9u32 as i32;
 pub const STATUS_INSUFFICIENT_RESOURCES: NTSTATUS = 0xC000_009Au32 as i32;
@@ -19,6 +20,7 @@ pub struct Status(pub NTSTATUS);
 
 impl Status {
     pub const SUCCESS: Status = Status(STATUS_SUCCESS);
+    pub const UNSUCCESSFUL: Status = Status(STATUS_UNSUCCESSFUL);
     pub const NOINTERFACE: Status = Status(STATUS_NOINTERFACE);
     pub const INSUFFICIENT_RESOURCES: Status = Status(STATUS_INSUFFICIENT_RESOURCES);
     pub const PENDING: Status = Status(STATUS_PENDING);

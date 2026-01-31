@@ -1,8 +1,8 @@
 use core::ffi::c_void;
 
 use kcom::{
-    declare_com_interface, impl_com_interface, impl_com_object, ComObject, ComRc, GUID,
-    IUnknownVtbl, NTSTATUS, STATUS_SUCCESS,
+    declare_com_interface, impl_com_interface, impl_com_object, ComObject, GUID, IUnknownVtbl,
+    NTSTATUS, STATUS_SUCCESS,
 };
 
 declare_com_interface! {
@@ -39,7 +39,7 @@ impl_com_object!(Foo, IFooVtbl);
 fn main() {
     let raw = Foo::new_com(Foo).unwrap();
     let foo_ptr = raw as *mut IFooRaw;
-    let com_ref = unsafe { ComRc::from_raw_addref(foo_ptr).unwrap() };
+    let com_ref = unsafe { IFooRaw::from_raw_addref(foo_ptr).unwrap() };
 
     unsafe {
         let vtbl = (*com_ref.as_ptr()).lpVtbl;

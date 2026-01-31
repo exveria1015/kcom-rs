@@ -19,8 +19,8 @@ pub enum UnicodeStringError {
 impl fmt::Display for UnicodeStringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooLong => write!(f, "UNICODE_STRING exceeds u16 length"),
-            Self::AllocationFailed => write!(f, "UNICODE_STRING allocation failed"),
+            Self::TooLong => f.write_str("UNICODE_STRING exceeds u16 length"),
+            Self::AllocationFailed => f.write_str("UNICODE_STRING allocation failed"),
         }
     }
 }

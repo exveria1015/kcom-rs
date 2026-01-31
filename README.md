@@ -9,7 +9,7 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - **Zero-copy layout** (VTable + refcount + Rust struct in one layout)
 - **Macro-generated VTables** via `declare_com_interface!`
 - **Result -> NTSTATUS** mapping in shims
-- **Optional async support (Experimental)** with a blocking executor (`try_block_on`)
+- **Async interface definitions (Experimental)**; shims are disabled pending a reactor runtime
 - **QueryInterface helper macro** for multi-interface support
 - **Multiple non-primary interfaces** via `ComObjectN` + `impl_com_interface_multiple!`
 - **Reference-counted ComRc** smart pointer for client-side COM usage
@@ -21,6 +21,42 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - `async-impl`: enables `async-com` and re-exports `async-trait` as `#[kcom::async_impl]`
 - `async-com-kernel`: enables `async-com` and `wdk-sys` (kernel builds)
 - `kernel-unicode`: enables `UNICODE_STRING` helpers (requires `wdk-sys`)
+
+## Async executor (kernel)
+
+The kernel executor exposes cooperative cancellation and a work-item tracker to
+drain outstanding work before driver unload.
+
+> Note: async state machines are polled on the kernel stack. Avoid large stack
+> locals in `async fn` (e.g. large arrays or buffers). Use heap allocation such
+> as `KBox` or other kernel allocators for large data.
+
+```rust
+use kcom::{spawn_cancellable_task, CancelHandle, try_finally, WorkItemTracker};
+
+let cancel: CancelHandle = spawn_cancellable_task(async {
+    // ... main work ...
+    kcom::STATUS_SUCCESS
+})?;
+
+// Later (e.g. IRP cancel routine)
+cancel.cancel();
+
+// Async cleanup on cancellation
+let _ = try_finally(async {
+    // main
+}, async {
+    // cleanup
+}).await;
+
+// Work-item tracking
+let tracker = WorkItemTracker::new();
+let _ = kcom::spawn_work_item_task_tracked(device, &tracker, async {
+    kcom::STATUS_SUCCESS
+});
+// ... during unload
+tracker.drain();
+```
 
 ## Kernel allocator initialization (driver)
 
@@ -139,115 +175,10 @@ let bar_ptr = unsafe {
 
 ## Usage (async interface)
 
-> **Experimental**: Async support is still evolving and may change in future releases.
-
-Enable async support for user-mode tests (no WDK required):
-
-```
-cargo run --example declare_com_interface_async --features async-com
-```
-
-For kernel builds (WDK + driver_model cfg), enable:
-
-```
-cargo build --features async-com-kernel
-```
-
-Declare async methods in the interface:
-
-```rust
-use kcom::{declare_com_interface, NTSTATUS};
-
-declare_com_interface! {
-    pub trait IMyDriver: IUnknown {
-        const IID: GUID = /* ... */;
-
-        async fn init(&self) -> NTSTATUS;
-    }
-}
-```
-
-### Implementing async methods
-
-Without sugar, you must return an initializer (InitBox) that the shim will allocate:
-
-```rust
-use core::future::{ready, Future, Ready};
-
-use kcom::{GlobalAllocator, InitBox, pin_init};
-
-// Async interfaces are `unsafe` to implement because they use a blocking executor.
-unsafe impl IMyDriver for MyDriver {
-    type InitFuture<'a> = Ready<NTSTATUS>;
-    type Allocator = GlobalAllocator;
-
-    fn init(&self) -> impl InitBoxTrait<Self::InitFuture<'_>, Self::Allocator, NTSTATUS> {
-        InitBox::new(GlobalAllocator, pin_init!(ready(STATUS_SUCCESS)))
-    }
-}
-```
-
-`async-impl` (powered by `async-trait`) does not support returning initializer types, so for
-`async-com` you must implement the InitBox pattern manually.
-
-```rust
-use kcom::async_impl;
-
-// #[async_impl]
-// unsafe impl IMyDriver for MyDriver {
-//     async fn init(&self) -> NTSTATUS {
-//         STATUS_SUCCESS
-//     }
-// }
-```
-
-### Async blocking caveat
-
-Async COM shims block the calling thread while polling the future. Avoid awaiting re-entrant
-COM calls on the same thread (deadlock risk). Design async methods to complete without needing
-the caller thread to pump messages.
-
-If `try_block_on` returns `STATUS_PENDING`, the COM method will return that status to the
-caller. Treat this as a signal that work must be offloaded (e.g. WorkItems) and avoid assuming
-the future was polled to completion.
-
-In kernel mode, `try_block_on` is `unsafe` to call. You must uphold IRQL and deadlock
-requirements (see below).
-
-## Kernel safety notes
-
-The blocking executor waits in kernel mode. For safe usage:
-
-1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher returns `STATUS_PENDING`
-2. **Watchdog**: debug-only timeout detects deadlocks
-3. **Stack safety**: wakers use heap-owned events (`Arc`); the executor pins on the stack
-4. **Deadlock safety**: do not call while holding spinlocks or resources needed by the future
-
-When `STATUS_PENDING` is returned, callers should queue the future to a WorkItem and return
-that status to the COM client (or map it to an appropriate error).
-
-Each async call still requires a heap allocation (KBox) from the implementation. This is suitable
-for control paths (init, create, etc.). Real-time / hot paths may require allocation-free designs.
-
-### True async via WorkItems
-
-When you must avoid blocking (IRQL > APC_LEVEL), queue the future onto a WorkItem and return
-`STATUS_PENDING`. KMDF and WDM helpers are provided in the executor module:
-
-```rust
-#[cfg(driver_model__driver_type = "KMDF")]
-unsafe {
-    kcom::executor::spawn_work_item_kmdf(device, future, completion_callback)?;
-}
-
-#[cfg(driver_model__driver_type = "WDM")]
-unsafe {
-    kcom::executor::spawn_work_item_wdm(device, queue, future, completion_callback)?;
-}
-```
-
-> **WDM注意**: ドライバの Unload と WorkItem 実行の競合を避けるため、
-> `IoAcquireRemoveLock` 等で寿命管理を行ってください。
+> **Experimental**: Async COM shims are currently disabled while the executor is
+> being redesigned around a non-blocking reactor model. Attempting to use async
+> methods will produce a compile-time error until a reactor-based runtime is
+> integrated.
 
 ## Client-side COM pointers
 

@@ -616,7 +616,48 @@ macro_rules! __kcom_define_interface {
                 const IID_STR: &'static str = stringify!($guid);
             }
 
-            unsafe impl $crate::traits::InterfaceVtable for [<$trait_name Vtbl>] {}
+            #[allow(dead_code)]
+            impl [<$trait_name Raw>] {
+                /// Queries for another COM interface and returns a smart pointer on success.
+                #[inline]
+                pub fn query_interface<U>(&self) -> $crate::StatusResult<$crate::ComRc<U>>
+                where
+                    U: $crate::smart_ptr::ComInterface + $crate::traits::ComInterfaceInfo,
+                {
+                    let mut out = core::ptr::null_mut();
+                    let vtbl = unsafe { *(self as *const _ as *mut *mut $crate::IUnknownVtbl) };
+                    let status = unsafe {
+                        ((*vtbl).QueryInterface)(
+                            self as *const _ as *mut core::ffi::c_void,
+                            &U::IID,
+                            &mut out,
+                        )
+                    };
+                    let status = $crate::Status::from_raw(status);
+                    if status.is_error() {
+                        return Err(status);
+                    }
+                    unsafe { $crate::ComRc::<U>::from_raw_or_status(out as *mut U) }
+                }
+
+                /// Takes ownership of a raw COM pointer and calls `AddRef` first.
+                ///
+                /// # Safety
+                /// `ptr` must be a valid COM interface pointer.
+                #[inline]
+                pub unsafe fn from_raw_addref(ptr: *mut Self) -> Option<$crate::ComRc<Self>> {
+                    $crate::ComRc::from_raw_addref(ptr)
+                }
+
+                /// Takes ownership of a raw COM pointer without calling `AddRef`.
+                ///
+                /// # Safety
+                /// `ptr` must be a valid COM interface pointer.
+                #[inline]
+                pub unsafe fn from_raw(ptr: *mut Self) -> Option<$crate::ComRc<Self>> {
+                    $crate::ComRc::from_raw(ptr)
+                }
+            }
 
             $vis struct [<$trait_name Interface>];
 
@@ -625,6 +666,8 @@ macro_rules! __kcom_define_interface {
                 const IID: $crate::GUID = $guid;
                 const IID_STR: &'static str = stringify!($guid);
             }
+
+            unsafe impl $crate::traits::InterfaceVtable for [<$trait_name Vtbl>] {}
 
             $($shim_funcs)*
         }
@@ -654,9 +697,9 @@ macro_rules! __kcom_define_interface {
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [
-                #[doc = "Async interfaces are unsafe to implement because the generated COM shims use a blocking executor."]
-                #[doc = "Implementors must uphold try_block_on safety requirements (IRQL <= APC_LEVEL in kernel mode,"]
-                #[doc = "avoid deadlocks, and ensure sufficient stack space)."]
+                #[doc = "Async interfaces require a reactor-based executor to drive futures."]
+                #[doc = "The built-in blocking executor has been removed; async COM shims are disabled for now."]
+                #[doc = "Provide a non-blocking runtime before enabling async methods."]
             ],
             trait_safety [unsafe],
             trait_methods [
@@ -692,58 +735,9 @@ macro_rules! __kcom_define_interface {
                 #[cfg(not(feature = "async-com"))]
                 compile_error!("async-com feature is required to use async methods in declare_com_interface!");
                 #[cfg(feature = "async-com")]
-                #[allow(non_snake_case)]
-                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
-                    this: *mut core::ffi::c_void
-                    $(, $arg_name: $arg_ty)*
-                ) -> $crate::__kcom_vtable_ret!($ret_ty)
-                where
-                    T: $crate::ComImpl<[<$trait_name Vtbl>]>,
-                {
-                    let wrapper = unsafe {
-                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
-                    };
-                    let init = wrapper.inner.$method_name($($arg_name),*);
-                    let future = match init.try_pin() {
-                        Ok(future) => future,
-                        Err(err) => return err.into_status(),
-                    };
-                    // SAFETY: caller of the shim must uphold try_block_on's safety requirements.
-                    let result = unsafe { $crate::executor::try_block_on(future) };
-                    match result {
-                        Ok(result) => $crate::__kcom_map_return!($ret_ty, result),
-                        Err(status) => status,
-                    }
-                }
-                #[cfg(feature = "async-com")]
-                #[allow(non_snake_case)]
-                #[allow(dead_code)]
-                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, S, A, const INDEX: usize>(
-                    this: *mut core::ffi::c_void
-                    $(, $arg_name: $arg_ty)*
-                ) -> $crate::__kcom_vtable_ret!($ret_ty)
-                where
-                    T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
-                    P: $crate::traits::InterfaceVtable,
-                    S: $crate::wrapper::SecondaryVtables,
-                    S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, [<$trait_name Vtbl>]>,
-                    A: $crate::allocator::Allocator + Send + Sync,
-                {
-                    let wrapper = unsafe {
-                        $crate::wrapper::ComObjectN::<T, P, S, A>::from_secondary_ptr::<[<$trait_name Vtbl>], INDEX>(this)
-                    };
-                    let init = wrapper.inner.$method_name($($arg_name),*);
-                    let future = match init.try_pin() {
-                        Ok(future) => future,
-                        Err(err) => return err.into_status(),
-                    };
-                    // SAFETY: caller of the shim must uphold try_block_on's safety requirements.
-                    let result = unsafe { $crate::executor::try_block_on(future) };
-                    match result {
-                        Ok(result) => $crate::__kcom_map_return!($ret_ty, result),
-                        Err(status) => status,
-                    }
-                }
+                compile_error!(
+                    "async-com shims are disabled: blocking executor removed. Provide a reactor-based executor before using async methods."
+                );
             ],
             ;
             $($rest)*

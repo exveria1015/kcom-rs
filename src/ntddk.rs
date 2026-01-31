@@ -4,16 +4,24 @@
 #![allow(non_camel_case_types)]
 
 pub use wdk_sys::{
-    APC_LEVEL, EVENT_TYPE, KWAIT_REASON, KEVENT, UNICODE_STRING, _EVENT_TYPE, _KWAIT_REASON, _MODE,
+    APC_LEVEL, DISPATCH_LEVEL, EVENT_TYPE, KWAIT_REASON, KEVENT, UNICODE_STRING, _EVENT_TYPE,
+    _KWAIT_REASON, _MODE,
 };
+pub use wdk_sys::{KDPC, KTIMER, LARGE_INTEGER, PKDPC, PKTIMER};
+pub use wdk_sys::{KIRQL, KSPIN_LOCK};
 pub use wdk_sys::ntddk::{
-    KeGetCurrentIrql, KeInitializeEvent, KeSetEvent, KeWaitForSingleObject, MmGetSystemRoutineAddress,
+    KeAcquireSpinLockRaiseToDpc, KeCancelTimer, KeGetCurrentIrql, KeInitializeDpc,
+    KeInitializeEvent, KeInitializeSpinLock, KeInitializeTimer, KeInsertQueueDpc,
+    KeReleaseSpinLock, KeRemoveQueueDpc, KeSetEvent, KeSetTimer, KeWaitForSingleObject,
+    MmGetSystemRoutineAddress,
 };
 pub use wdk_sys::_EVENT_TYPE::SynchronizationEvent;
 
+
 #[cfg(all(feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
 pub use wdk_sys::ntddk::{
-    WORK_QUEUE_TYPE, PIO_WORKITEM, DEVICE_OBJECT, IoAllocateWorkItem, IoFreeWorkItem, IoQueueWorkItem,
+    DEVICE_OBJECT, IoAllocateWorkItem, IoFreeWorkItem, IoQueueWorkItem, ObDereferenceObject,
+    ObReferenceObject, PIO_WORKITEM, WORK_QUEUE_TYPE,
 };
 
 #[cfg(all(feature = "async-com-kernel", driver_model__driver_type = "KMDF"))]
