@@ -514,7 +514,7 @@ macro_rules! __kcom_define_interface {
                 compile_error!("async-com feature is required to use async methods in declare_com_interface!");
                 #[cfg(feature = "async-com")]
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::__kcom_vtable_ret!($ret_ty)
@@ -539,7 +539,7 @@ macro_rules! __kcom_define_interface {
                 #[cfg(feature = "async-com")]
                 #[allow(non_snake_case)]
                 #[allow(dead_code)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::__kcom_vtable_ret!($ret_ty)
@@ -606,7 +606,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -620,7 +620,7 @@ macro_rules! __kcom_define_interface {
                 }
                 #[allow(non_snake_case)]
                 #[allow(dead_code)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -677,7 +677,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -690,7 +690,7 @@ macro_rules! __kcom_define_interface {
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -747,7 +747,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -760,7 +760,7 @@ macro_rules! __kcom_define_interface {
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS
@@ -817,7 +817,7 @@ macro_rules! __kcom_define_interface {
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $ret_ty
@@ -831,7 +831,7 @@ macro_rules! __kcom_define_interface {
                 }
                 #[allow(non_snake_case)]
                 #[allow(dead_code)]
-                pub(crate) unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, A>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $ret_ty
