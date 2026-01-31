@@ -15,8 +15,6 @@ mod host {
     use super::*;
     use core::pin::Pin;
 
-    struct HostWaker;
-
     unsafe fn host_waker_clone(data: *const ()) -> RawWaker {
         RawWaker::new(data, &HOST_WAKER_VTABLE)
     }

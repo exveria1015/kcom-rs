@@ -3,11 +3,13 @@
 
 #![allow(non_camel_case_types)]
 
-pub use wdk_sys::ntddk::{
-    APC_LEVEL, KeGetCurrentIrql, KeInitializeEvent, KeSetEvent, KeWaitForSingleObject,
-    KWAIT_REASON, _MODE, EVENT_TYPE, KEVENT, UNICODE_STRING, MmGetSystemRoutineAddress,
+pub use wdk_sys::{
+    APC_LEVEL, EVENT_TYPE, KWAIT_REASON, KEVENT, UNICODE_STRING, _EVENT_TYPE, _KWAIT_REASON, _MODE,
 };
-pub use wdk_sys::ntddk::EVENT_TYPE::SynchronizationEvent;
+pub use wdk_sys::ntddk::{
+    KeGetCurrentIrql, KeInitializeEvent, KeSetEvent, KeWaitForSingleObject, MmGetSystemRoutineAddress,
+};
+pub use wdk_sys::_EVENT_TYPE::SynchronizationEvent;
 
 #[cfg(all(feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
 pub use wdk_sys::ntddk::{
@@ -28,7 +30,6 @@ pub fn wdf_workitem_config_init(evt: PFN_WDF_WORKITEM) -> WDF_WORKITEM_CONFIG {
         Size: core::mem::size_of::<WDF_WORKITEM_CONFIG>() as u32,
         EvtWorkItem: evt,
         AutomaticSerialization: 0,
-        _padding: [0; 3],
     }
 }
 
