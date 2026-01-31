@@ -284,6 +284,8 @@ impl Allocator for WdkAllocator {
 #[cfg(feature = "driver")]
 const POOL_FLAG_PAGED: u64 = 0x0000_0001;
 #[cfg(feature = "driver")]
+const POOL_FLAG_UNINITIALIZED: u64 = 0x0000_0002;
+#[cfg(feature = "driver")]
 const POOL_FLAG_NON_PAGED: u64 = 0x0000_0040;
 
 #[cfg(feature = "driver")]
@@ -299,7 +301,7 @@ unsafe fn ex_allocate_pool(pool: PoolType, size: usize, tag: u32) -> *mut c_void
     let flags = match pool {
         PoolType::NonPagedNx => POOL_FLAG_NON_PAGED,
         PoolType::Paged => POOL_FLAG_PAGED,
-    };
+    } | POOL_FLAG_UNINITIALIZED;
     if let Some(func) = unsafe { get_ex_allocate_pool2() } {
         return unsafe { func(flags, size, tag) };
     }
