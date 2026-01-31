@@ -648,7 +648,7 @@ macro_rules! __kcom_define_interface {
             iid ($guid),
             trait_docs [
                 #[doc = "Async interfaces are unsafe to implement because the generated COM shims use a blocking executor."]
-                #[doc = "Implementors must uphold block_on safety requirements (IRQL <= APC_LEVEL in kernel mode,"]
+                #[doc = "Implementors must uphold try_block_on safety requirements (IRQL <= APC_LEVEL in kernel mode,"]
                 #[doc = "avoid deadlocks, and ensure sufficient stack space)."]
             ],
             trait_safety [unsafe],
@@ -701,7 +701,7 @@ macro_rules! __kcom_define_interface {
                         Ok(future) => future,
                         Err(err) => return err.into_status(),
                     };
-                    // SAFETY: caller of the shim must uphold block_on's safety requirements.
+                    // SAFETY: caller of the shim must uphold try_block_on's safety requirements.
                     let result = unsafe { $crate::executor::try_block_on(future) };
                     match result {
                         Ok(result) => $crate::__kcom_map_return!($ret_ty, result),
@@ -730,7 +730,7 @@ macro_rules! __kcom_define_interface {
                         Ok(future) => future,
                         Err(err) => return err.into_status(),
                     };
-                    // SAFETY: caller of the shim must uphold block_on's safety requirements.
+                    // SAFETY: caller of the shim must uphold try_block_on's safety requirements.
                     let result = unsafe { $crate::executor::try_block_on(future) };
                     match result {
                         Ok(result) => $crate::__kcom_map_return!($ret_ty, result),

@@ -15,14 +15,15 @@ categories = ["os::windows-apis", "no-std"]
 paste = "1"
 async-trait = { version = "0.1", optional = true }
 utf16_lit = { version = "2", optional = true }
+wdk-sys = { version = "0.2", optional = true, default-features = false }
 
 [features]
 default = []
 async-com = []
 async-impl = ["async-com", "async-trait"]
-async-com-kernel = ["async-com"]
-kernel-unicode = ["utf16_lit"]
-driver = []
+async-com-kernel = ["async-com", "wdk-sys"]
+kernel-unicode = ["utf16_lit", "wdk-sys"]
+driver = ["wdk-sys"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(driver_model__driver_type, values("WDM", "KMDF"))'] }

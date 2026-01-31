@@ -37,7 +37,7 @@ pub use allocator::{
     Allocator, GlobalAllocator, InitBox, InitBoxTrait, KBox, KBoxError, PinInit, PinInitOnce,
 };
 #[cfg(feature = "driver")]
-pub use allocator::{init_box_with_tag, KernelInitBox, PoolType, WdkAllocator};
+pub use allocator::{init_box_with_tag, init_ex_allocate_pool2, KernelInitBox, PoolType, WdkAllocator};
 #[cfg(feature = "kernel-unicode")]
 pub use unicode::{unicode_string_as_slice, unicode_string_to_string, OwnedUnicodeString, UnicodeStringError};
 pub use wrapper::{ComObject, ComObjectN};

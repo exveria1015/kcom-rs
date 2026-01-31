@@ -9,7 +9,7 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - **Zero-copy layout** (VTable + refcount + Rust struct in one layout)
 - **Macro-generated VTables** via `declare_com_interface!`
 - **Result -> NTSTATUS** mapping in shims
-- **Optional async support (Experimental)** with a blocking executor
+- **Optional async support (Experimental)** with a blocking executor (`try_block_on`)
 - **QueryInterface helper macro** for multi-interface support
 - **Multiple non-primary interfaces** via `ComObjectN` + `impl_com_interface_multiple!`
 - **Reference-counted ComRc** smart pointer for client-side COM usage
@@ -200,14 +200,14 @@ Async COM shims block the calling thread while polling the future. Avoid awaitin
 COM calls on the same thread (deadlock risk). Design async methods to complete without needing
 the caller thread to pump messages.
 
-In kernel mode, the blocking executor is `unsafe` to call. You must uphold IRQL and deadlock
+In kernel mode, `try_block_on` is `unsafe` to call. You must uphold IRQL and deadlock
 requirements (see below).
 
 ## Kernel safety notes
 
 The blocking executor waits in kernel mode. For safe usage:
 
-1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher is rejected (always enforced)
+1. **IRQL guard**: calling at `DISPATCH_LEVEL` or higher returns `STATUS_PENDING`
 2. **Watchdog**: debug-only timeout detects deadlocks
 3. **Stack safety**: wakers use heap-owned events (`Arc`); the executor pins on the stack
 4. **Deadlock safety**: do not call while holding spinlocks or resources needed by the future

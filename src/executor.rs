@@ -396,32 +396,13 @@ mod kernel {
     feature = "async-com-kernel",
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
 ))]
-pub use kernel::block_on;
-#[cfg(all(
-    feature = "async-com-kernel",
-    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
-))]
-pub use kernel::block_on_pinned;
-#[cfg(all(
-    feature = "async-com-kernel",
-    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
-))]
 pub use kernel::try_block_on;
+
 #[cfg(driver_model__driver_type = "KMDF")]
 pub use kernel::spawn_work_item_kmdf;
 #[cfg(driver_model__driver_type = "WDM")]
 pub use kernel::spawn_work_item_wdm;
 
-#[cfg(not(all(
-    feature = "async-com-kernel",
-    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
-)))]
-pub use host::block_on;
-#[cfg(not(all(
-    feature = "async-com-kernel",
-    any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
-)))]
-pub use host::block_on_pinned;
 #[cfg(not(all(
     feature = "async-com-kernel",
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")

@@ -11,6 +11,10 @@ use core::marker::PhantomData;
 use core::ffi::c_void;
 #[cfg(feature = "driver")]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(feature = "driver")]
+use wdk_sys::ntddk::MmGetSystemRoutineAddress;
+#[cfg(feature = "driver")]
+use wdk_sys::UNICODE_STRING;
 
 use crate::iunknown::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES};
 
@@ -347,12 +351,12 @@ pub unsafe fn init_ex_allocate_pool2() {
         return;
     }
 
-    let name = UNICODE_STRING {
+    let mut name = UNICODE_STRING {
         Length: 30,
         MaximumLength: 32,
         Buffer: EX_ALLOCATE_POOL2_NAME.as_ptr() as *mut u16,
     };
-    let ptr = unsafe { MmGetSystemRoutineAddress(&name) };
+    let ptr = unsafe { MmGetSystemRoutineAddress(&mut name) };
     EX_ALLOCATE_POOL2_PTR.store(ptr as usize, Ordering::Release);
     EX_ALLOCATE_POOL2_READY.store(true, Ordering::Release);
 }
@@ -407,21 +411,7 @@ unsafe fn get_ex_allocate_pool2() -> Option<ExAllocatePool2Fn> {
 }
 
 #[cfg(feature = "driver")]
-#[repr(C)]
-struct UNICODE_STRING {
-    Length: u16,
-    MaximumLength: u16,
-    Buffer: *mut u16,
-}
-
-#[cfg(feature = "driver")]
 unsafe extern "C" {
     fn ExAllocatePoolWithTag(pool_type: u32, number_of_bytes: usize, tag: u32) -> *mut c_void;
     fn ExFreePoolWithTag(p: *mut c_void, tag: u32);
-}
-
-#[cfg(feature = "driver")]
-#[link(name = "ntoskrnl")]
-unsafe extern "system" {
-    fn MmGetSystemRoutineAddress(name: *const UNICODE_STRING) -> *mut c_void;
 }
