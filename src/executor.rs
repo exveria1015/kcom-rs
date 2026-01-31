@@ -39,14 +39,7 @@ mod host {
         unsafe { Waker::from_raw(raw) }
     }
 
-    /// Execute a Future synchronously in user mode.
-    pub fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = pin!(future);
-        block_on_pinned(future.as_mut())
-    }
-
-    /// Execute a pinned Future synchronously in user mode.
-    pub fn block_on_pinned<F: Future>(mut future: Pin<&mut F>) -> F::Output {
+    fn block_on_pinned<F: Future>(mut future: Pin<&mut F>) -> F::Output {
         let waker = host_waker();
         let mut cx = Context::from_waker(&waker);
 
@@ -60,7 +53,8 @@ mod host {
 
     /// Execute a Future synchronously and return the result.
     pub fn try_block_on<F: Future>(future: F) -> Result<F::Output, i32> {
-        Ok(block_on(future))
+        let mut future = pin!(future);
+        Ok(block_on_pinned(future.as_mut()))
     }
 }
 
@@ -157,51 +151,15 @@ mod kernel {
         unsafe { Waker::from_raw(raw) }
     }
 
-    fn check_irql() {
+    fn irql_allows_block() -> bool {
         let irql = unsafe { KeGetCurrentIrql() };
-        if irql > APC_LEVEL as u8 {
-            panic!(
-                "block_on called at IRQL {} > APC_LEVEL. System deadlock risk.",
-                irql
-            );
-        }
+        irql <= APC_LEVEL as u8
     }
 
-    /// Execute a Future synchronously in kernel mode.
-    ///
-    /// # Safety
-    /// This function blocks the current thread.
-    /// - **IRQL Requirement**: Must be called at IRQL <= APC_LEVEL.
-    /// - **Deadlock Risk**: Do NOT call this if the current thread owns resources (spinlocks,
-    ///   mutexes, etc.) needed by the future.
-    /// - **Stack Usage**: Async tasks may consume significant kernel stack space; ensure
-    ///   sufficient stack is available.
-    pub unsafe fn block_on<F: Future>(future: F) -> F::Output {
-        check_irql();
-
+    unsafe fn block_on_pinned_unchecked<F: Future>(mut future: Pin<&mut F>) -> F::Output {
         let mut event = KernelEvent(core::cell::UnsafeCell::new(unsafe { core::mem::zeroed() }));
         event.init();
-        let waker = kernel_waker(&event);
-        let mut cx = Context::from_waker(&waker);
-        let mut future = pin!(future);
 
-        loop {
-            match future.as_mut().poll(&mut cx) {
-                Poll::Ready(result) => return result,
-                Poll::Pending => event.wait(),
-            }
-        }
-    }
-
-    /// Execute a pinned Future synchronously in kernel mode.
-    ///
-    /// # Safety
-    /// Same requirements as block_on.
-    pub unsafe fn block_on_pinned<F: Future>(mut future: Pin<&mut F>) -> F::Output {
-        check_irql();
-
-        let mut event = KernelEvent(core::cell::UnsafeCell::new(unsafe { core::mem::zeroed() }));
-        event.init();
         let waker = kernel_waker(&event);
         let mut cx = Context::from_waker(&waker);
 
@@ -211,18 +169,24 @@ mod kernel {
                 Poll::Pending => event.wait(),
             }
         }
+    }
+
+    unsafe fn try_block_on_pinned<F: Future>(future: Pin<&mut F>) -> Result<F::Output, i32> {
+        if !irql_allows_block() {
+            return Err(STATUS_PENDING);
+        }
+        Ok(unsafe { block_on_pinned_unchecked(future) })
     }
 
     /// Execute a Future synchronously when IRQL <= APC_LEVEL, otherwise return STATUS_PENDING.
     ///
     /// # Safety
-    /// Same as block_on, but may return STATUS_PENDING instead of blocking.
+    /// This function blocks the current thread when IRQL <= APC_LEVEL.
+    /// Do NOT call this if the current thread owns resources (spinlocks, mutexes, etc.)
+    /// needed by the future.
     pub unsafe fn try_block_on<F: Future>(future: F) -> Result<F::Output, i32> {
-        let irql = unsafe { KeGetCurrentIrql() };
-        if irql > APC_LEVEL as u8 {
-            return Err(STATUS_PENDING);
-        }
-        Ok(unsafe { block_on(future) })
+        let mut future = pin!(future);
+        unsafe { try_block_on_pinned(future.as_mut()) }
     }
 
     #[cfg(driver_model__driver_type = "KMDF")]
@@ -272,7 +236,10 @@ mod kernel {
     unsafe fn poll_future<F: Future<Output = NTSTATUS>>(data: *mut core::ffi::c_void) -> NTSTATUS {
         let future = unsafe { &mut *(data as *mut F) };
         let mut pinned = unsafe { Pin::new_unchecked(future) };
-        unsafe { block_on_pinned(pinned.as_mut()) }
+        match unsafe { try_block_on_pinned(pinned.as_mut()) } {
+            Ok(status) => status,
+            Err(status) => status,
+        }
     }
 
     #[cfg(driver_model__driver_type = "KMDF")]
@@ -363,7 +330,10 @@ mod kernel {
     unsafe fn wdm_poll_future<F: Future<Output = NTSTATUS>>(data: *mut core::ffi::c_void) -> NTSTATUS {
         let future = unsafe { &mut *(data as *mut F) };
         let mut pinned = unsafe { Pin::new_unchecked(future) };
-        unsafe { block_on_pinned(pinned.as_mut()) }
+        match unsafe { try_block_on_pinned(pinned.as_mut()) } {
+            Ok(status) => status,
+            Err(status) => status,
+        }
     }
 
     #[cfg(driver_model__driver_type = "WDM")]

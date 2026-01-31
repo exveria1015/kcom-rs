@@ -463,7 +463,7 @@ where
         let riid = unsafe { &*riid };
 
         if *riid == IID_IUNKNOWN {
-            unsafe { Self::shim_add_ref_secondary(this) };
+unsafe { Self::shim_add_ref_secondary::<I, INDEX>(this) };
             unsafe { *ppv = primary };
             return STATUS_SUCCESS;
         }

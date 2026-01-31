@@ -9,6 +9,8 @@ use core::ptr::NonNull;
 use core::marker::PhantomData;
 #[cfg(feature = "driver")]
 use core::ffi::c_void;
+#[cfg(feature = "driver")]
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::iunknown::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES};
 
@@ -258,6 +260,17 @@ impl WdkAllocator {
     pub const fn new(pool: PoolType, tag: u32) -> Self {
         Self { pool, tag }
     }
+
+    /// Allocate memory without zeroing. Caller must fully initialize the buffer.
+    #[inline]
+    pub unsafe fn alloc_uninitialized(&self, layout: Layout) -> *mut u8 {
+        if layout.size() == 0 {
+            return core::ptr::NonNull::<u8>::dangling().as_ptr();
+        }
+
+        let ptr = unsafe { ex_allocate_pool_uninitialized(self.pool, layout.size(), self.tag) };
+        ptr as *mut u8
+    }
 }
 
 #[cfg(feature = "driver")]
@@ -270,6 +283,11 @@ impl Allocator for WdkAllocator {
 
         let ptr = unsafe { ex_allocate_pool(self.pool, layout.size(), self.tag) };
         ptr as *mut u8
+    }
+
+    #[inline]
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        unsafe { self.alloc(layout) }
     }
 
     #[inline]
@@ -297,7 +315,70 @@ const POOL_TYPE_NON_PAGED_NX: u32 = 512;
 type ExAllocatePool2Fn = unsafe extern "C" fn(u64, usize, u32) -> *mut c_void;
 
 #[cfg(feature = "driver")]
+const EX_ALLOCATE_POOL2_NAME: [u16; 16] = [
+    b'E' as u16,
+    b'x' as u16,
+    b'A' as u16,
+    b'l' as u16,
+    b'l' as u16,
+    b'o' as u16,
+    b'c' as u16,
+    b'a' as u16,
+    b't' as u16,
+    b'e' as u16,
+    b'P' as u16,
+    b'o' as u16,
+    b'o' as u16,
+    b'l' as u16,
+    b'2' as u16,
+    0,
+];
+
+#[cfg(feature = "driver")]
+static EX_ALLOCATE_POOL2_PTR: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "driver")]
+static EX_ALLOCATE_POOL2_READY: AtomicBool = AtomicBool::new(false);
+
+/// Resolve ExAllocatePool2 at PASSIVE_LEVEL (e.g. DriverEntry) and cache it.
+#[cfg(feature = "driver")]
+#[inline]
+pub unsafe fn init_ex_allocate_pool2() {
+    if EX_ALLOCATE_POOL2_READY.load(Ordering::Acquire) {
+        return;
+    }
+
+    let name = UNICODE_STRING {
+        Length: 30,
+        MaximumLength: 32,
+        Buffer: EX_ALLOCATE_POOL2_NAME.as_ptr() as *mut u16,
+    };
+    let ptr = unsafe { MmGetSystemRoutineAddress(&name) };
+    EX_ALLOCATE_POOL2_PTR.store(ptr as usize, Ordering::Release);
+    EX_ALLOCATE_POOL2_READY.store(true, Ordering::Release);
+}
+
+#[cfg(feature = "driver")]
 unsafe fn ex_allocate_pool(pool: PoolType, size: usize, tag: u32) -> *mut c_void {
+    let flags = match pool {
+        PoolType::NonPagedNx => POOL_FLAG_NON_PAGED,
+        PoolType::Paged => POOL_FLAG_PAGED,
+    };
+    if let Some(func) = unsafe { get_ex_allocate_pool2() } {
+        return unsafe { func(flags, size, tag) };
+    }
+    let pool_type = match pool {
+        PoolType::NonPagedNx => POOL_TYPE_NON_PAGED_NX,
+        PoolType::Paged => POOL_TYPE_PAGED,
+    };
+    let ptr = unsafe { ExAllocatePoolWithTag(pool_type, size, tag) };
+    if !ptr.is_null() {
+        unsafe { ptr::write_bytes(ptr, 0, size) };
+    }
+    ptr
+}
+
+#[cfg(feature = "driver")]
+unsafe fn ex_allocate_pool_uninitialized(pool: PoolType, size: usize, tag: u32) -> *mut c_void {
     let flags = match pool {
         PoolType::NonPagedNx => POOL_FLAG_NON_PAGED,
         PoolType::Paged => POOL_FLAG_PAGED,
@@ -314,31 +395,11 @@ unsafe fn ex_allocate_pool(pool: PoolType, size: usize, tag: u32) -> *mut c_void
 
 #[cfg(feature = "driver")]
 unsafe fn get_ex_allocate_pool2() -> Option<ExAllocatePool2Fn> {
-    const NAME: [u16; 16] = [
-        b'E' as u16,
-        b'x' as u16,
-        b'A' as u16,
-        b'l' as u16,
-        b'l' as u16,
-        b'o' as u16,
-        b'c' as u16,
-        b'a' as u16,
-        b't' as u16,
-        b'e' as u16,
-        b'P' as u16,
-        b'o' as u16,
-        b'o' as u16,
-        b'l' as u16,
-        b'2' as u16,
-        0,
-    ];
-    let name = UNICODE_STRING {
-        Length: 30,
-        MaximumLength: 32,
-        Buffer: NAME.as_ptr() as *mut u16,
-    };
-    let ptr = unsafe { MmGetSystemRoutineAddress(&name) };
-    if ptr.is_null() {
+    if !EX_ALLOCATE_POOL2_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    let ptr = EX_ALLOCATE_POOL2_PTR.load(Ordering::Acquire);
+    if ptr == 0 {
         None
     } else {
         Some(unsafe { core::mem::transmute(ptr) })
@@ -351,11 +412,6 @@ struct UNICODE_STRING {
     Length: u16,
     MaximumLength: u16,
     Buffer: *mut u16,
-}
-
-#[cfg(feature = "driver")]
-unsafe extern "C" {
-    fn ExAllocatePool2(flags: u64, number_of_bytes: usize, tag: u32) -> *mut c_void;
 }
 
 #[cfg(feature = "driver")]
