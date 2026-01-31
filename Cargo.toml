@@ -15,7 +15,7 @@ categories = ["os::windows-apis", "no-std"]
 paste = "1"
 async-trait = { version = "0.1", optional = true }
 utf16_lit = { version = "2", optional = true }
-wdk-sys = { version = "0.2", optional = true, default-features = false }
+wdk-sys = { version = "*", optional = true, default-features = false }
 
 [features]
 default = []

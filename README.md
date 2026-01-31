@@ -22,6 +22,13 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - `async-com-kernel`: enables `async-com` and `wdk-sys` (kernel builds)
 - `kernel-unicode`: enables `UNICODE_STRING` helpers (requires `wdk-sys`)
 
+## Kernel allocator initialization (driver)
+
+When using `WdkAllocator` (feature `driver`), call `init_ex_allocate_pool2()` once at
+PASSIVE_LEVEL (e.g. `DriverEntry`). Allocation paths will attempt a best-effort lazy
+initialization, but that can occur at elevated IRQL, so explicit initialization is strongly
+recommended to ensure `ExAllocatePool2` is used safely on Windows 10 2004+.
+
 ## Usage (sync interface)
 
 ```rust
@@ -200,6 +207,10 @@ Async COM shims block the calling thread while polling the future. Avoid awaitin
 COM calls on the same thread (deadlock risk). Design async methods to complete without needing
 the caller thread to pump messages.
 
+If `try_block_on` returns `STATUS_PENDING`, the COM method will return that status to the
+caller. Treat this as a signal that work must be offloaded (e.g. WorkItems) and avoid assuming
+the future was polled to completion.
+
 In kernel mode, `try_block_on` is `unsafe` to call. You must uphold IRQL and deadlock
 requirements (see below).
 
@@ -211,6 +222,9 @@ The blocking executor waits in kernel mode. For safe usage:
 2. **Watchdog**: debug-only timeout detects deadlocks
 3. **Stack safety**: wakers use heap-owned events (`Arc`); the executor pins on the stack
 4. **Deadlock safety**: do not call while holding spinlocks or resources needed by the future
+
+When `STATUS_PENDING` is returned, callers should queue the future to a WorkItem and return
+that status to the COM client (or map it to an appropriate error).
 
 Each async call still requires a heap allocation (KBox) from the implementation. This is suitable
 for control paths (init, create, etc.). Real-time / hot paths may require allocation-free designs.

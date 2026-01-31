@@ -7,6 +7,15 @@ use core::future::Future;
 use core::pin::pin;
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
+/// Heap-allocated future using the global allocator.
+pub type LocalBoxFuture<'a, T> =
+    core::pin::Pin<crate::allocator::KBox<dyn Future<Output = T> + 'a, crate::allocator::GlobalAllocator>>;
+
+/// Heap-allocated future using the kernel allocator.
+#[cfg(feature = "driver")]
+pub type KernelBoxFuture<'a, T> =
+    core::pin::Pin<crate::allocator::KBox<dyn Future<Output = T> + Send + 'a, crate::allocator::WdkAllocator>>;
+
 #[cfg(not(all(
     feature = "async-com-kernel",
     any(driver_model__driver_type = "WDM", driver_model__driver_type = "KMDF")
@@ -182,6 +191,10 @@ mod kernel {
     /// This function blocks the current thread when IRQL <= APC_LEVEL.
     /// Do NOT call this if the current thread owns resources (spinlocks, mutexes, etc.)
     /// needed by the future.
+    ///
+    /// If IRQL is too high, this returns `STATUS_PENDING`. Callers should treat
+    /// this as an indication that the work must be offloaded (e.g. via WorkItems)
+    /// and avoid assuming the future was polled.
     pub unsafe fn try_block_on<F: Future>(future: F) -> Result<F::Output, i32> {
         let mut future = pin!(future);
         unsafe { try_block_on_pinned(future.as_mut()) }

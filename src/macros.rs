@@ -10,7 +10,7 @@
 macro_rules! declare_com_interface {
     (
         $(#[$interface_attr:meta])*
-        pub trait $trait_name:ident: IUnknown {
+        $vis:vis trait $trait_name:ident: IUnknown {
             const IID: $guid_ty:ty = $guid:expr;
             $($methods:tt)*
         }
@@ -18,6 +18,7 @@ macro_rules! declare_com_interface {
         $crate::__kcom_define_interface! {
             @entry
             attrs [$(#[$interface_attr])*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($crate::IUnknown),
             parent_vtable (<
@@ -29,7 +30,7 @@ macro_rules! declare_com_interface {
     };
     (
         $(#[$interface_attr:meta])*
-        pub trait $trait_name:ident: $parent_trait:ident {
+        $vis:vis trait $trait_name:ident: $parent_trait:ident {
             const IID: $guid_ty:ty = $guid:expr;
             $($methods:tt)*
         }
@@ -37,6 +38,7 @@ macro_rules! declare_com_interface {
         $crate::__kcom_define_interface! {
             @entry
             attrs [$(#[$interface_attr])*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
             parent_vtable (<
@@ -543,6 +545,7 @@ macro_rules! iunknown_vtbl {
 macro_rules! __kcom_define_interface {
     (@entry
         attrs [$($attrs:tt)*],
+        vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
@@ -552,6 +555,7 @@ macro_rules! __kcom_define_interface {
         $crate::__kcom_define_interface!(
             @parse
             attrs [$($attrs)*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
@@ -568,6 +572,7 @@ macro_rules! __kcom_define_interface {
 
     (@parse
         attrs [$($attrs:tt)*],
+        vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
@@ -581,7 +586,7 @@ macro_rules! __kcom_define_interface {
     ) => {
         $($attrs)*
         $($trait_docs)*
-        pub $($trait_safety)* trait $trait_name: $parent_trait + Sync {
+        $vis $($trait_safety)* trait $trait_name: $parent_trait + Sync {
             #[allow(dead_code)]
             const IID: $crate::GUID = $guid;
             $($trait_methods)*
@@ -591,7 +596,7 @@ macro_rules! __kcom_define_interface {
             #[repr(C)]
             #[derive(Clone, Copy)]
             #[allow(non_snake_case)]
-            pub struct [<$trait_name Vtbl>] {
+            $vis struct [<$trait_name Vtbl>] {
                 pub parent: $($parent_vtable)+,
                 $($vtable_fields)*
             }
@@ -599,7 +604,7 @@ macro_rules! __kcom_define_interface {
             #[repr(C)]
             #[derive(Clone, Copy)]
             #[allow(non_snake_case)]
-            pub struct [<$trait_name Raw>] {
+            $vis struct [<$trait_name Raw>] {
                 pub lpVtbl: *mut [<$trait_name Vtbl>],
             }
 
@@ -613,7 +618,7 @@ macro_rules! __kcom_define_interface {
 
             unsafe impl $crate::traits::InterfaceVtable for [<$trait_name Vtbl>] {}
 
-            pub struct [<$trait_name Interface>];
+            $vis struct [<$trait_name Interface>];
 
             impl $crate::traits::ComInterfaceInfo for [<$trait_name Interface>] {
                 type Vtable = [<$trait_name Vtbl>];
@@ -627,6 +632,7 @@ macro_rules! __kcom_define_interface {
 
     (@parse
         attrs [$($attrs:tt)*],
+        vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
@@ -642,6 +648,7 @@ macro_rules! __kcom_define_interface {
         $crate::__kcom_define_interface!(
             @parse
             attrs [$($attrs)*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
@@ -745,6 +752,7 @@ macro_rules! __kcom_define_interface {
 
     (@parse
         attrs [$($attrs:tt)*],
+        vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
@@ -760,6 +768,7 @@ macro_rules! __kcom_define_interface {
         $crate::__kcom_define_interface!(
             @parse
             attrs [$($attrs)*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
@@ -793,7 +802,6 @@ macro_rules! __kcom_define_interface {
                     $crate::iunknown::IntoNtStatus::into_ntstatus(wrapper.inner.$method_name($($arg_name),*))
                 }
                 #[allow(non_snake_case)]
-                #[allow(dead_code)]
                 pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, S, A, const INDEX: usize>(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
@@ -818,6 +826,7 @@ macro_rules! __kcom_define_interface {
 
     (@parse
         attrs [$($attrs:tt)*],
+        vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
@@ -833,6 +842,7 @@ macro_rules! __kcom_define_interface {
         $crate::__kcom_define_interface!(
             @parse
             attrs [$($attrs)*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
@@ -890,6 +900,7 @@ macro_rules! __kcom_define_interface {
 
     (@parse
         attrs [$($attrs:tt)*],
+        vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
@@ -905,6 +916,7 @@ macro_rules! __kcom_define_interface {
         $crate::__kcom_define_interface!(
             @parse
             attrs [$($attrs)*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),
@@ -962,6 +974,7 @@ macro_rules! __kcom_define_interface {
 
     (@parse
         attrs [$($attrs:tt)*],
+        vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
         parent_vtable ($($parent_vtable:tt)+),
@@ -977,6 +990,7 @@ macro_rules! __kcom_define_interface {
         $crate::__kcom_define_interface!(
             @parse
             attrs [$($attrs)*],
+            vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
             parent_vtable ($($parent_vtable)+),

@@ -21,6 +21,7 @@ impl Status {
     pub const SUCCESS: Status = Status(STATUS_SUCCESS);
     pub const NOINTERFACE: Status = Status(STATUS_NOINTERFACE);
     pub const INSUFFICIENT_RESOURCES: Status = Status(STATUS_INSUFFICIENT_RESOURCES);
+    pub const PENDING: Status = Status(STATUS_PENDING);
 
     #[inline]
     pub const fn from_raw(raw: NTSTATUS) -> Self {
@@ -50,6 +51,18 @@ impl Status {
             Err(self)
         }
     }
+
+    /// Converts this status into a result that distinguishes STATUS_PENDING.
+    #[inline]
+    pub fn to_pending_result(self) -> Result<PendingResult, Status> {
+        if self.0 == STATUS_PENDING {
+            Ok(PendingResult::Pending)
+        } else if self.is_success() {
+            Ok(PendingResult::Ready(()))
+        } else {
+            Err(self)
+        }
+    }
 }
 
 impl From<NTSTATUS> for Status {
@@ -67,6 +80,12 @@ impl From<Status> for NTSTATUS {
 }
 
 pub type StatusResult<T = ()> = Result<T, Status>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PendingResult<T = ()> {
+    Ready(T),
+    Pending,
+}
 
 pub trait IntoNtStatus {
     fn into_ntstatus(self) -> NTSTATUS;

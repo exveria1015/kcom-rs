@@ -49,6 +49,10 @@ macro_rules! kstr {
 /// The buffer is constructed once, boxed, and never resized.
 /// Mutable accessors are intentionally omitted to keep the backing storage
 /// stable for the lifetime of the UNICODE_STRING.
+///
+/// The returned `UNICODE_STRING` references memory owned by this type. Callers
+/// must not free it (e.g., via `RtlFreeUnicodeString`) or store it beyond the
+/// lifetime of the `OwnedUnicodeString` instance.
 pub struct OwnedUnicodeString<A: Allocator + Send + Sync = GlobalAllocator> {
     inner: UNICODE_STRING,
     buffer: *mut u16,
@@ -89,6 +93,10 @@ impl<A: Allocator + Send + Sync> OwnedUnicodeString<A> {
         })
     }
 
+    /// Returns a borrowed UNICODE_STRING view.
+    ///
+    /// The underlying buffer remains owned by this instance and must not be freed
+    /// by the caller.
     #[inline]
     pub fn as_unicode(&self) -> &UNICODE_STRING {
         &self.inner

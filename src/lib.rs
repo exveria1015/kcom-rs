@@ -23,8 +23,8 @@ pub mod traits;
 pub mod wrapper;
 
 pub use iunknown::{
-    GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, STATUS_NOINTERFACE, STATUS_SUCCESS, Status,
-    StatusResult,
+    GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, PendingResult, STATUS_NOINTERFACE, STATUS_SUCCESS,
+    Status, StatusResult,
 };
 pub use paste;
 #[cfg(feature = "async-impl")]
@@ -32,7 +32,7 @@ pub use async_trait::async_trait as async_impl;
 #[cfg(feature = "kernel-unicode")]
 pub use utf16_lit;
 pub use traits::{ComImpl, ComInterfaceInfo, InterfaceVtable, IUnknown, IUnknownInterface};
-pub use smart_ptr::{ComInterface, ComRc};
+pub use smart_ptr::{ComInterface, ComRc, ThreadSafeComInterface};
 pub use allocator::{
     Allocator, GlobalAllocator, InitBox, InitBoxTrait, KBox, KBoxError, PinInit, PinInitOnce,
 };

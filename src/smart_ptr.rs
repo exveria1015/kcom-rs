@@ -17,6 +17,13 @@ use crate::iunknown::{IUnknownVtbl, Status, StatusResult};
 /// 3. The vtable begins with the `IUnknown` methods.
 pub unsafe trait ComInterface: Sized {}
 
+/// Marker trait for COM interfaces that are free-threaded and safe to share.
+///
+/// # Safety
+/// Implementors guarantee that the underlying COM object supports concurrent
+/// calls from multiple threads and that reference counting is thread-safe.
+pub unsafe trait ThreadSafeComInterface: ComInterface {}
+
 /// Reference-counted COM interface pointer.
 ///
 /// # Safety
@@ -25,13 +32,15 @@ pub unsafe trait ComInterface: Sized {}
 ///
 /// # Thread Safety
 /// This type does not implement `Send` or `Sync` by default because many COM
-/// interfaces are thread-affine. If you use `ComRc` with interfaces that are
-/// explicitly free-threaded in your environment, wrap or newtype it and add a
-/// documented `unsafe impl Send/Sync` for that specific case.
+/// interfaces are thread-affine. For free-threaded interfaces, implement
+/// [`ThreadSafeComInterface`] and `ComRc` will become `Send + Sync`.
 pub struct ComRc<T: ComInterface> {
     ptr: NonNull<T>,
     _phantom: PhantomData<T>,
 }
+
+unsafe impl<T: ThreadSafeComInterface> Send for ComRc<T> {}
+unsafe impl<T: ThreadSafeComInterface> Sync for ComRc<T> {}
 
 impl<T: ComInterface> ComRc<T> {
     /// Takes ownership of a raw COM pointer without calling `AddRef`.

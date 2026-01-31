@@ -10,11 +10,11 @@ use core::marker::PhantomData;
 #[cfg(feature = "driver")]
 use core::ffi::c_void;
 #[cfg(feature = "driver")]
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "driver")]
-use wdk_sys::ntddk::MmGetSystemRoutineAddress;
+use wdk_sys::ntddk::{KeGetCurrentIrql, MmGetSystemRoutineAddress};
 #[cfg(feature = "driver")]
-use wdk_sys::UNICODE_STRING;
+use wdk_sys::{UNICODE_STRING, PASSIVE_LEVEL};
 
 use crate::iunknown::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES};
 
@@ -339,26 +339,26 @@ const EX_ALLOCATE_POOL2_NAME: [u16; 16] = [
 ];
 
 #[cfg(feature = "driver")]
+const EX_ALLOCATE_POOL2_STATE_UNINIT: usize = 0;
+#[cfg(feature = "driver")]
+const EX_ALLOCATE_POOL2_STATE_INITING: usize = 1;
+#[cfg(feature = "driver")]
+const EX_ALLOCATE_POOL2_STATE_READY: usize = 2;
+#[cfg(feature = "driver")]
 static EX_ALLOCATE_POOL2_PTR: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "driver")]
-static EX_ALLOCATE_POOL2_READY: AtomicBool = AtomicBool::new(false);
+static EX_ALLOCATE_POOL2_STATE: AtomicUsize = AtomicUsize::new(EX_ALLOCATE_POOL2_STATE_UNINIT);
 
 /// Resolve ExAllocatePool2 at PASSIVE_LEVEL (e.g. DriverEntry) and cache it.
+///
+/// Calling this in DriverEntry ensures ExAllocatePool2 is used even when later
+/// allocations happen at elevated IRQL. Allocations will lazily attempt to
+/// resolve the routine if it has not been initialized yet, but that best-effort
+/// path may occur at unsuitable IRQLs, so prefer explicit initialization.
 #[cfg(feature = "driver")]
 #[inline]
 pub unsafe fn init_ex_allocate_pool2() {
-    if EX_ALLOCATE_POOL2_READY.load(Ordering::Acquire) {
-        return;
-    }
-
-    let mut name = UNICODE_STRING {
-        Length: 30,
-        MaximumLength: 32,
-        Buffer: EX_ALLOCATE_POOL2_NAME.as_ptr() as *mut u16,
-    };
-    let ptr = unsafe { MmGetSystemRoutineAddress(&mut name) };
-    EX_ALLOCATE_POOL2_PTR.store(ptr as usize, Ordering::Release);
-    EX_ALLOCATE_POOL2_READY.store(true, Ordering::Release);
+    unsafe { try_init_ex_allocate_pool2() };
 }
 
 #[cfg(feature = "driver")]
@@ -398,8 +398,39 @@ unsafe fn ex_allocate_pool_uninitialized(pool: PoolType, size: usize, tag: u32) 
 }
 
 #[cfg(feature = "driver")]
+unsafe fn try_init_ex_allocate_pool2() {
+    let irql = unsafe { KeGetCurrentIrql() };
+    if irql > PASSIVE_LEVEL as u8 {
+        return;
+    }
+    if EX_ALLOCATE_POOL2_STATE
+        .compare_exchange(
+            EX_ALLOCATE_POOL2_STATE_UNINIT,
+            EX_ALLOCATE_POOL2_STATE_INITING,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return;
+    }
+
+    let mut name = UNICODE_STRING {
+        Length: 30,
+        MaximumLength: 32,
+        Buffer: EX_ALLOCATE_POOL2_NAME.as_ptr() as *mut u16,
+    };
+    let ptr = unsafe { MmGetSystemRoutineAddress(&mut name) };
+    EX_ALLOCATE_POOL2_PTR.store(ptr as usize, Ordering::Release);
+    EX_ALLOCATE_POOL2_STATE.store(EX_ALLOCATE_POOL2_STATE_READY, Ordering::Release);
+}
+
+#[cfg(feature = "driver")]
 unsafe fn get_ex_allocate_pool2() -> Option<ExAllocatePool2Fn> {
-    if !EX_ALLOCATE_POOL2_READY.load(Ordering::Acquire) {
+    if EX_ALLOCATE_POOL2_STATE.load(Ordering::Acquire) != EX_ALLOCATE_POOL2_STATE_READY {
+        unsafe { try_init_ex_allocate_pool2() };
+    }
+    if EX_ALLOCATE_POOL2_STATE.load(Ordering::Acquire) != EX_ALLOCATE_POOL2_STATE_READY {
         return None;
     }
     let ptr = EX_ALLOCATE_POOL2_PTR.load(Ordering::Acquire);
