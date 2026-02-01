@@ -9,7 +9,7 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - **Zero-copy layout** (VTable + refcount + Rust struct in one layout)
 - **Macro-generated VTables** via `declare_com_interface!`
 - **Result -> NTSTATUS** mapping in shims
-- **Async interface definitions (Experimental)**; shims are disabled pending a reactor runtime
+- **Async interface definitions (Experimental)** returning `AsyncOperation` objects
 - **QueryInterface helper macro** for multi-interface support
 - **Multiple non-primary interfaces** via `ComObjectN` + `impl_com_interface_multiple!`
 - **Reference-counted ComRc** smart pointer for client-side COM usage
@@ -176,10 +176,8 @@ let bar_ptr = unsafe {
 
 ## Usage (async interface)
 
-> **Experimental**: Async COM shims are currently disabled while the executor is
-> being redesigned around a non-blocking reactor model. Attempting to use async
-> methods will produce a compile-time error until a reactor-based runtime is
-> integrated.
+> **Experimental**: Async COM shims spawn tasks and return `AsyncOperation` objects.
+> Host builds poll once; driver builds require a kernel executor to drive progress.
 
 ## Client-side COM pointers
 

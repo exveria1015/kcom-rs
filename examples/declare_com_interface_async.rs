@@ -1,12 +1,11 @@
 #[cfg(feature = "async-com")]
 mod async_example {
-    use core::future::Future;
-    use core::pin::Pin;
-    use core::task::{Context, Poll};
+    use core::future::Ready;
 
     use kcom::{
-        declare_com_interface, impl_com_interface, impl_com_object, pin_init, ComObject,
-        GlobalAllocator, GUID, IUnknownVtbl, InitBox, InitBoxTrait, NTSTATUS, STATUS_SUCCESS,
+        declare_com_interface, impl_com_interface, impl_com_object, pin_init, AsyncOperationRaw,
+        AsyncStatus, ComObject, ComRc, GlobalAllocator, GUID, IUnknownVtbl, InitBox, InitBoxTrait,
+        NTSTATUS, STATUS_SUCCESS,
     };
 
     declare_com_interface! {
@@ -23,38 +22,16 @@ mod async_example {
         }
     }
 
-    struct YieldOnce {
-        value: NTSTATUS,
-        yielded: bool,
-    }
-
-    impl Future for YieldOnce {
-        type Output = NTSTATUS;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            if self.yielded {
-                Poll::Ready(self.value)
-            } else {
-                self.yielded = true;
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-        }
-    }
-
     struct AsyncFoo;
 
     unsafe impl IAsyncFoo for AsyncFoo {
-        type InitFuture<'a> = YieldOnce;
+        type InitFuture = Ready<NTSTATUS>;
         type Allocator = GlobalAllocator;
 
-        fn init(&self, _value: u32) -> impl InitBoxTrait<Self::InitFuture<'_>, Self::Allocator, NTSTATUS> {
+        fn init(&self, _value: u32) -> impl InitBoxTrait<Self::InitFuture, Self::Allocator, NTSTATUS> {
             InitBox::new(
                 GlobalAllocator,
-                pin_init!(YieldOnce {
-                    value: STATUS_SUCCESS,
-                    yielded: false,
-                }),
+                pin_init!(core::future::ready(STATUS_SUCCESS)),
             )
         }
     }
@@ -73,8 +50,14 @@ mod async_example {
 
         unsafe {
             let vtbl = *(raw as *mut *const IAsyncFooVtbl);
-            let status = ((*vtbl).init)(raw, 123);
-            assert_eq!(status, STATUS_SUCCESS);
+            let op = ((*vtbl).init)(raw, 123);
+            assert!(!op.is_null());
+
+            let op = ComRc::<AsyncOperationRaw<NTSTATUS>>::from_raw(op).unwrap();
+            let status = op.get_status().unwrap();
+            assert_eq!(status, AsyncStatus::Completed);
+            let result = op.get_result().unwrap();
+            assert_eq!(result, STATUS_SUCCESS);
 
             ComObject::<AsyncFoo, IAsyncFooVtbl>::shim_release(raw);
         }

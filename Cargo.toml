@@ -17,6 +17,9 @@ async-trait = { version = "0.1", optional = true }
 utf16_lit = { version = "2", optional = true }
 wdk-sys = { version = "*", optional = true, default-features = false }
 
+[dev-dependencies]
+criterion = "0.5"
+
 [features]
 default = []
 async-com = []
@@ -24,6 +27,7 @@ async-impl = ["async-com", "async-trait"]
 async-com-kernel = ["async-com", "wdk-sys"]
 kernel-unicode = ["utf16_lit", "wdk-sys"]
 driver = ["wdk-sys"]
+driver-test-stub = ["driver"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(driver_model__driver_type, values("WDM", "KMDF"))'] }
@@ -45,3 +49,17 @@ required-features = ["driver"]
 [[example]]
 name = "work_item_task_driver"
 required-features = ["driver", "async-com-kernel"]
+
+[[bench]]
+name = "async_benchmark"
+harness = false
+required-features = ["async-com"]
+
+[[bench]]
+name = "comparison"
+harness = false
+
+[[bench]]
+name = "comparison_async"
+harness = false
+required-features = ["async-com"]

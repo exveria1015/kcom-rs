@@ -729,6 +729,9 @@ pub struct KernelTimerFuture {
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+unsafe impl Send for KernelTimerFuture {}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 impl KernelTimerFuture {
     #[inline]
     pub fn new(due_time_100ns: i64) -> Result<Self, NTSTATUS> {

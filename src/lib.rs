@@ -11,12 +11,16 @@ extern crate std;
 
 pub mod iunknown;
 pub mod allocator;
+#[cfg(all(feature = "driver", feature = "driver-test-stub"))]
+mod driver_test_stub;
 pub mod executor;
 pub mod macros;
 pub use macros::*;
 pub mod smart_ptr;
 pub mod task;
 pub mod vtable;
+#[cfg(feature = "async-com")]
+pub mod async_com;
 #[cfg(feature = "kernel-unicode")]
 pub mod unicode;
 #[cfg(any(feature = "async-com-kernel", feature = "kernel-unicode"))]
@@ -44,6 +48,21 @@ pub use allocator::{init_box_with_tag, init_ex_allocate_pool2, KernelInitBox, Po
 #[cfg(feature = "kernel-unicode")]
 pub use unicode::{unicode_string_as_slice, unicode_string_to_string, OwnedUnicodeString, UnicodeStringError};
 pub use wrapper::{ComObject, ComObjectN};
+
+#[cfg(feature = "async-com")]
+pub use async_com::{
+    spawn_async_operation,
+    spawn_async_operation_cancellable,
+    spawn_async_operation_error,
+    spawn_async_operation_raw,
+    spawn_async_operation_raw_cancellable,
+    spawn_async_operation_error_raw,
+    AsyncOperationRaw,
+    AsyncOperationTask,
+    AsyncOperationVtbl,
+    AsyncStatus,
+    AsyncValueType,
+};
 
 pub use executor::{spawn_cancellable_task, CancelHandle, spawn_task};
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]

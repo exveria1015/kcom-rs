@@ -4,6 +4,9 @@ use core::task::{Context, Poll};
 
 use kcom::{spawn_task, NTSTATUS, STATUS_SUCCESS};
 
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+use kcom::TaskTracker;
+
 struct YieldOnce {
     yielded: bool,
 }
@@ -22,6 +25,15 @@ impl Future for YieldOnce {
     }
 }
 
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+fn main() {
+    let tracker = TaskTracker::new();
+    let status = spawn_task(&tracker, YieldOnce { yielded: false });
+    assert_eq!(status, STATUS_SUCCESS);
+    tracker.drain();
+}
+
+#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
 fn main() {
     let status = spawn_task(YieldOnce { yielded: false });
     assert_eq!(status, STATUS_SUCCESS);

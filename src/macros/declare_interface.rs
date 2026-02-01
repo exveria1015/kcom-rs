@@ -256,9 +256,9 @@ macro_rules! __kcom_define_interface {
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [
-                #[doc = "Async interfaces require a reactor-based executor to drive futures."]
-                #[doc = "The built-in blocking executor has been removed; async COM shims are disabled for now."]
-                #[doc = "Provide a non-blocking runtime before enabling async methods."]
+                #[doc = "Async interfaces spawn tasks and return AsyncOperation objects."]
+                #[doc = "Futures must be Send + 'static; allocators must be Send + Sync."]
+                #[doc = "A non-blocking executor is required to drive completion."]
             ],
             trait_safety [unsafe],
             trait_methods [
@@ -266,16 +266,14 @@ macro_rules! __kcom_define_interface {
                 $(#[$method_attr])*
                 #[cfg(feature = "async-com")]
                 $crate::paste::paste! {
-                    type [<$method_name:camel Future>]<'a>: ::core::future::Future<Output = $ret_ty> + Send + 'a
-                    where
-                        Self: 'a;
+                    type [<$method_name:camel Future>]: ::core::future::Future<Output = $ret_ty> + Send + 'static;
                 }
                 #[cfg(feature = "async-com")]
-                type Allocator: $crate::allocator::Allocator;
+                type Allocator: $crate::allocator::Allocator + Send + Sync;
                 #[cfg(feature = "async-com")]
                 $crate::paste::paste! {
                     fn $method_name(&self $(, $arg_name : $arg_ty)*) -> impl $crate::allocator::InitBoxTrait<
-                        Self::[<$method_name:camel Future>]<'_>,
+                        Self::[<$method_name:camel Future>],
                         Self::Allocator,
                         $crate::NTSTATUS
                     >;
@@ -287,22 +285,100 @@ macro_rules! __kcom_define_interface {
                 pub $method_name: unsafe extern "system" fn(
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
-                ) -> $crate::__kcom_vtable_ret!($ret_ty),
+                ) -> *mut $crate::async_com::AsyncOperationRaw<$ret_ty>,
             ],
             vtable_inits [
                 $($vtable_inits)*
+                #[cfg(feature = "async-com")]
+                $method_name: [<shim_ $trait_name _ $method_name>]::<T>,
             ],
             vtable_inits_secondary [
                 $($vtable_inits_secondary)*
+                #[cfg(feature = "async-com")]
+                $method_name: [<shim_ $trait_name _ $method_name _secondary>]::<T, P, S, A, INDEX>,
             ],
             shim_funcs [
                 $($shim_funcs)*
                 #[cfg(not(feature = "async-com"))]
                 compile_error!("async-com feature is required to use async methods in declare_com_interface!");
                 #[cfg(feature = "async-com")]
-                compile_error!(
-                    "async-com shims are disabled: blocking executor removed. Provide a reactor-based executor before using async methods."
-                );
+                #[allow(non_snake_case)]
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name>]<T: $trait_name>(
+                    this: *mut core::ffi::c_void
+                    $(, $arg_name: $arg_ty)*
+                ) -> *mut $crate::async_com::AsyncOperationRaw<$ret_ty>
+                where
+                    T: $crate::ComImpl<[<$trait_name Vtbl>]>,
+                {
+                    if this.is_null() {
+                        return core::ptr::null_mut();
+                    }
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
+                    };
+                    let init = wrapper.inner.$method_name($($arg_name),*);
+                    let mut future = match init.try_pin() {
+                        Ok(future) => future,
+                        Err(err) => {
+                            let status: $crate::NTSTATUS = err.into();
+                            return match $crate::async_com::spawn_async_operation_error_raw::<
+                                $ret_ty,
+                                <T as $trait_name>::[<$method_name:camel Future>],
+                            >(status) {
+                                Ok(ptr) => ptr,
+                                Err(_status) => core::ptr::null_mut(),
+                            };
+                        }
+                    };
+                    let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
+                        future.as_mut().await
+                    });
+                    match op {
+                        Ok(ptr) => ptr,
+                        Err(_status) => core::ptr::null_mut(),
+                    }
+                }
+                #[allow(non_snake_case)]
+                #[allow(dead_code)]
+                pub unsafe extern "system" fn [<shim_ $trait_name _ $method_name _secondary>]<T, P, S, A, const INDEX: usize>(
+                    this: *mut core::ffi::c_void
+                    $(, $arg_name: $arg_ty)*
+                ) -> *mut $crate::async_com::AsyncOperationRaw<$ret_ty>
+                where
+                    T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
+                    P: $crate::vtable::InterfaceVtable,
+                    S: $crate::wrapper::SecondaryVtables,
+                    S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, [<$trait_name Vtbl>]>,
+                    A: $crate::allocator::Allocator + Send + Sync,
+                {
+                    if this.is_null() {
+                        return core::ptr::null_mut();
+                    }
+                    let wrapper = unsafe {
+                        $crate::wrapper::ComObjectN::<T, P, S, A>::from_secondary_ptr::<[<$trait_name Vtbl>], INDEX>(this)
+                    };
+                    let init = wrapper.inner.$method_name($($arg_name),*);
+                    let mut future = match init.try_pin() {
+                        Ok(future) => future,
+                        Err(err) => {
+                            let status: $crate::NTSTATUS = err.into();
+                            return match $crate::async_com::spawn_async_operation_error_raw::<
+                                $ret_ty,
+                                <T as $trait_name>::[<$method_name:camel Future>],
+                            >(status) {
+                                Ok(ptr) => ptr,
+                                Err(_status) => core::ptr::null_mut(),
+                            };
+                        }
+                    };
+                    let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
+                        future.as_mut().await
+                    });
+                    match op {
+                        Ok(ptr) => ptr,
+                        Err(_status) => core::ptr::null_mut(),
+                    }
+                }
             ],
             ;
             $($rest)*

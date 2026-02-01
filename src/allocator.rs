@@ -140,6 +140,9 @@ pub struct KBox<T: ?Sized, A: Allocator = GlobalAllocator> {
     layout: Layout,
 }
 
+unsafe impl<T: ?Sized + Send, A: Allocator + Send> Send for KBox<T, A> {}
+unsafe impl<T: ?Sized + Sync, A: Allocator + Sync> Sync for KBox<T, A> {}
+
 impl<T, A: Allocator> KBox<T, A> {
     #[inline]
     pub fn try_pin_init<E>(alloc: A, mut init: impl PinInit<T, E>) -> Result<Pin<Self>, KBoxError<E>> {
