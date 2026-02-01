@@ -1,15 +1,19 @@
+#[cfg(feature = "async-com")]
 use kcom::{
     declare_com_interface, impl_com_interface, impl_com_object, pin_init, AsyncOperationRaw,
     AsyncStatus, ComObject, ComRc, GlobalAllocator, GUID, IUnknownVtbl, InitBox, InitBoxTrait,
     NTSTATUS,
 };
+#[cfg(feature = "async-com")]
 use std::hint::black_box;
+#[cfg(feature = "async-com")]
 use std::time::Instant;
 
 // =========================================================
 // 1. Interface Definition (Async)
 // =========================================================
 
+#[cfg(feature = "async-com")]
 declare_com_interface! {
     pub trait IMyAsyncOp: IUnknown {
         const IID: GUID = GUID {
@@ -24,8 +28,10 @@ declare_com_interface! {
 // 2. kcom Implementation (Async)
 // =========================================================
 
+#[cfg(feature = "async-com")]
 struct MyAsyncImpl;
 
+#[cfg(feature = "async-com")]
 unsafe impl IMyAsyncOp for MyAsyncImpl {
     type GetStatusFuture = core::future::Ready<i32>;
     type Allocator = GlobalAllocator;
@@ -35,6 +41,7 @@ unsafe impl IMyAsyncOp for MyAsyncImpl {
     }
 }
 
+#[cfg(feature = "async-com")]
 impl_com_interface! {
     impl MyAsyncImpl: IMyAsyncOp {
         parent = IUnknownVtbl,
@@ -42,14 +49,17 @@ impl_com_interface! {
     }
 }
 
+#[cfg(feature = "async-com")]
 impl_com_object!(MyAsyncImpl, IMyAsyncOpVtbl);
 
 // =========================================================
 // 3. Standard Rust Implementation (Baseline)
 // =========================================================
 
+#[cfg(feature = "async-com")]
 struct ModernImpl;
 
+#[cfg(feature = "async-com")]
 impl ModernImpl {
     fn get_status(&self) -> i32 {
         1
@@ -60,6 +70,7 @@ impl ModernImpl {
 // Benchmarking Utilities
 // =========================================================
 
+#[cfg(feature = "async-com")]
 fn measure_ns<F>(name: &str, iterations: u64, mut func: F) -> f64
 where
     F: FnMut(),
@@ -76,6 +87,7 @@ where
     avg
 }
 
+#[cfg(feature = "async-com")]
 fn main() {
     const ITERATIONS: u64 = 10_000_000; // 10M loops
 
@@ -141,4 +153,9 @@ fn main() {
     unsafe {
         ComObject::<MyAsyncImpl, IMyAsyncOpVtbl>::shim_release(raw_obj);
     }
+}
+
+#[cfg(not(feature = "async-com"))]
+fn main() {
+    eprintln!("This benchmark requires the `async-com` feature. Run with `--features async-com`." );
 }
