@@ -14,6 +14,8 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - **Multiple non-primary interfaces** via `ComObjectN` + `impl_com_interface_multiple!`
 - **Reference-counted ComRc** smart pointer for client-side COM usage
 - **Kernel Unicode helpers** for `UNICODE_STRING`
+- **Stack-based Unicode buffers** via `LocalUnicodeString`
+- **Optional refcount hardening** with overflow/underflow guards
 
 ## Feature flags
 
@@ -21,6 +23,7 @@ VTables and shims from Rust traits, minimizing boilerplate for driver authors.
 - `async-impl`: enables `async-com` and re-exports `async-trait` as `#[kcom::async_impl]`
 - `async-com-kernel`: enables `async-com` and `wdk-sys` (kernel builds)
 - `kernel-unicode`: enables `UNICODE_STRING` helpers (requires `wdk-sys`)
+- `refcount-hardening`: adds refcount overflow/underflow guards (slower AddRef/Release, fail-fast abort)
 
 ## Async executor (kernel)
 
@@ -31,13 +34,51 @@ drain outstanding work before driver unload.
 > locals in `async fn` (e.g. large arrays or buffers). Use heap allocation such
 > as `KBox` or other kernel allocators for large data.
 
-```rust
-use kcom::{spawn_cancellable_task, CancelHandle, try_finally, WorkItemTracker};
+## Safety notes (panic + DPC)
 
-let cancel: CancelHandle = spawn_cancellable_task(async {
+- `spawn_dpc_task*` are **unsafe** because DPC polling happens at
+  `DISPATCH_LEVEL`. Futures must be nonpaged, nonblocking, and must avoid
+  pageable kernel APIs.
+- `kcom` does **not** catch panics across `extern "system"` boundaries. In
+  kernel builds, set `panic = "abort"` and (optionally) install a panic handler
+  that calls `KeBugCheckEx` so failures are fail-fast instead of UB.
+
+## Tracing hooks (ETW/WPP integration)
+
+`kcom` exposes a lightweight trace hook to integrate with DbgPrint, WPP, or
+custom ETW providers. The `ensure!` macro emits file/line in debug builds when
+the hook is installed.
+
+```rust
+use kcom::{set_trace_hook, trace};
+
+fn my_trace(args: core::fmt::Arguments<'_>) {
+    // Forward to DbgPrint / WPP / ETW
+    let _ = args;
+}
+
+set_trace_hook(my_trace);
+trace!("driver started: status={:#x}", 0);
+```
+
+## Stack-based UNICODE_STRING
+
+```rust
+use kcom::LocalUnicodeString;
+use core::fmt::Write;
+
+let mut s = LocalUnicodeString::<64>::new();
+write!(&mut s, "Err code: {:x}", 0x2a).unwrap();
+let unicode = s.as_unicode();
+```
+
+```rust
+use kcom::{spawn_dpc_task_cancellable, CancelHandle, try_finally, WorkItemTracker};
+
+let cancel: CancelHandle = unsafe { spawn_dpc_task_cancellable(async {
     // ... main work ...
     kcom::STATUS_SUCCESS
-})?;
+})? };
 
 // Later (e.g. IRP cancel routine)
 cancel.cancel();
@@ -51,7 +92,7 @@ let _ = try_finally(async {
 
 // Work-item tracking
 let tracker = WorkItemTracker::new();
-let _ = kcom::spawn_work_item_task_tracked(device, &tracker, async {
+let _ = kcom::spawn_task_tracked(device, &tracker, async {
     kcom::STATUS_SUCCESS
 });
 // ... during unload

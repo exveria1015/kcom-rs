@@ -12,7 +12,7 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 #[cfg(test)]
 use core::sync::atomic::AtomicUsize;
 
-use crate::executor::{spawn_cancellable_task, CancelHandle};
+use crate::executor::{spawn_dpc_task_cancellable, CancelHandle};
 use crate::iunknown::{
     GUID, IUnknownVtbl, NTSTATUS, STATUS_CANCELLED, STATUS_PENDING, STATUS_SUCCESS,
     STATUS_UNSUCCESSFUL,
@@ -257,7 +257,7 @@ where
             STATUS_SUCCESS
         };
 
-        let handle = match spawn_cancellable_task(task) {
+        let handle = match unsafe { spawn_dpc_task_cancellable(task) } {
             Ok(handle) => handle,
             Err(status) => {
                 unsafe {

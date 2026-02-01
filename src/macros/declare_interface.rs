@@ -316,10 +316,16 @@ macro_rules! __kcom_define_interface {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::from_ptr(this)
                     };
+                    unsafe {
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_add_ref(this);
+                    }
                     let init = wrapper.inner.$method_name($($arg_name),*);
                     let mut future = match init.try_pin() {
                         Ok(future) => future,
                         Err(err) => {
+                            unsafe {
+                                $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_release(this);
+                            }
                             let status: $crate::NTSTATUS = err.into();
                             return match $crate::async_com::spawn_async_operation_error_raw::<
                                 $ret_ty,
@@ -330,12 +336,31 @@ macro_rules! __kcom_define_interface {
                             };
                         }
                     };
+                    let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_release;
+                    let guard_ptr = this as usize;
                     let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
+                        struct ReleaseGuard {
+                            ptr: usize,
+                            release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
+                        }
+                        impl Drop for ReleaseGuard {
+                            fn drop(&mut self) {
+                                unsafe { (self.release)(self.ptr as *mut core::ffi::c_void) };
+                            }
+                        }
+                        let _guard = ReleaseGuard {
+                            ptr: guard_ptr,
+                            release: release_fn,
+                        };
                         future.as_mut().await
                     });
                     match op {
                         Ok(ptr) => ptr,
-                        Err(_status) => core::ptr::null_mut(),
+                        Err(_status) => {
+                            unsafe { (release_fn)(this) };
+                            core::ptr::null_mut()
+                        }
                     }
                 }
                 #[allow(non_snake_case)]
@@ -357,10 +382,17 @@ macro_rules! __kcom_define_interface {
                     let wrapper = unsafe {
                         $crate::wrapper::ComObjectN::<T, P, S, A>::from_secondary_ptr::<[<$trait_name Vtbl>], INDEX>(this)
                     };
+                    let primary = wrapper as *const _ as *mut core::ffi::c_void;
+                    unsafe {
+                        $crate::wrapper::ComObjectN::<T, P, S, A>::shim_add_ref(primary);
+                    }
                     let init = wrapper.inner.$method_name($($arg_name),*);
                     let mut future = match init.try_pin() {
                         Ok(future) => future,
                         Err(err) => {
+                            unsafe {
+                                $crate::wrapper::ComObjectN::<T, P, S, A>::shim_release(primary);
+                            }
                             let status: $crate::NTSTATUS = err.into();
                             return match $crate::async_com::spawn_async_operation_error_raw::<
                                 $ret_ty,
@@ -371,12 +403,31 @@ macro_rules! __kcom_define_interface {
                             };
                         }
                     };
+                    let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
+                        $crate::wrapper::ComObjectN::<T, P, S, A>::shim_release;
+                    let guard_ptr = primary as usize;
                     let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
+                        struct ReleaseGuard {
+                            ptr: usize,
+                            release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
+                        }
+                        impl Drop for ReleaseGuard {
+                            fn drop(&mut self) {
+                                unsafe { (self.release)(self.ptr as *mut core::ffi::c_void) };
+                            }
+                        }
+                        let _guard = ReleaseGuard {
+                            ptr: guard_ptr,
+                            release: release_fn,
+                        };
                         future.as_mut().await
                     });
                     match op {
                         Ok(ptr) => ptr,
-                        Err(_status) => core::ptr::null_mut(),
+                        Err(_status) => {
+                            unsafe { (release_fn)(primary) };
+                            core::ptr::null_mut()
+                        }
                     }
                 }
             ],

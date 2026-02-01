@@ -2,7 +2,12 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
-use kcom::{spawn_task, NTSTATUS, STATUS_SUCCESS};
+use kcom::{NTSTATUS, STATUS_SUCCESS};
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+use kcom::spawn_dpc_task;
+#[cfg(not(feature = "driver"))]
+use kcom::spawn_task;
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 use kcom::TaskTracker;
@@ -28,12 +33,12 @@ impl Future for YieldOnce {
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 fn main() {
     let tracker = TaskTracker::new();
-    let status = spawn_task(&tracker, YieldOnce { yielded: false });
+    let status = unsafe { spawn_dpc_task(&tracker, YieldOnce { yielded: false }) };
     assert_eq!(status, STATUS_SUCCESS);
     tracker.drain();
 }
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
+#[cfg(not(feature = "driver"))]
 fn main() {
     let status = spawn_task(YieldOnce { yielded: false });
     assert_eq!(status, STATUS_SUCCESS);

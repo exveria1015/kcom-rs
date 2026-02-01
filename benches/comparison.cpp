@@ -13,6 +13,17 @@
 #define STDMETHODCALLTYPE
 #endif
 
+#if defined(_MSC_VER)
+#define NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define NOINLINE __attribute__((noinline))
+#else
+#define NOINLINE
+#endif
+
+static volatile int g_sink = 0;
+static constexpr int WARMUP_ITERATIONS = 100000;
+
 // =========================================================
 // 1. Manual COM Implementation (The "Hardcore" C++ way)
 // =========================================================
@@ -43,7 +54,7 @@ public:
         return count;
     }
 
-    int STDMETHODCALLTYPE GetStatus(int* status) override {
+    NOINLINE int STDMETHODCALLTYPE GetStatus(int* status) override {
         *status = 1; // Completed
         return 0; // S_OK
     }
@@ -55,7 +66,7 @@ public:
 
 class ModernImpl {
 public:
-    int GetStatus(int* status) {
+    NOINLINE int GetStatus(int* status) {
         *status = 1;
         return 0;
     }
@@ -63,6 +74,7 @@ public:
 
 // =========================================================
 // Benchmarking Utilities
+// - Warmup + atomic_signal_fence to reduce measurement skew from optimizations.
 // =========================================================
 
 // 修正: コンパイラの最適化によるループ削除を防ぐ
@@ -75,17 +87,29 @@ void do_not_optimize(T&& datum) {
 }
 
 template <typename Func>
-double measure_ns(const char* name, int iterations, Func func) {
+double measure_ns_raw(int iterations, Func func) {
+    for (int i = 0; i < WARMUP_ITERATIONS; ++i) {
+        func();
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+    }
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < iterations; ++i) {
         func();
+        std::atomic_signal_fence(std::memory_order_seq_cst);
     }
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-    double avg = (double)duration / iterations;
-    
-    std::cout << "[" << name << "] Average: " << avg << " ns" << std::endl;
-    return avg;
+    return static_cast<double>(duration) / iterations;
+}
+
+template <typename Func>
+double measure_ns(const char* name, int iterations, double baseline, Func func) {
+    double avg = measure_ns_raw(iterations, func);
+    double adj = avg > baseline ? (avg - baseline) : 0.0;
+
+    std::cout << "[" << name << "] Average: " << avg << " ns"
+              << " (adj " << adj << " ns)" << std::endl;
+    return adj;
 }
 
 int main() {
@@ -93,18 +117,27 @@ int main() {
 
     std::cout << "Running C++ Benchmarks (" << ITERATIONS << " iterations)..." << std::endl;
     std::cout << "-----------------------------------------------------" << std::endl;
+    double baseline = measure_ns_raw(ITERATIONS, []() { g_sink += 1; });
+    std::cout << "[Cpp_Empty_Loop] Average: " << baseline << " ns" << std::endl;
 
     // --- Allocation Benchmark ---
 
     // 1. Manual COM: new + RefCount Init
-    measure_ns("Cpp_Manual_New", ITERATIONS, []() {
+    measure_ns("Cpp_Manual_New", ITERATIONS, baseline, []() {
         IMyAsyncOp* obj = new ManualComImpl();
         // すぐに捨てる
         obj->Release(); 
     });
 
-    // 2. Modern C++: make_shared (Single Allocation)
-    measure_ns("Cpp_Make_Shared", ITERATIONS, []() {
+    // 2. Modern C++: new (Single Allocation)
+    measure_ns("Cpp_New_Ready", ITERATIONS, baseline, []() {
+        auto ptr = new ModernImpl();
+        do_not_optimize(*ptr);
+        delete ptr;
+    });
+
+    // 3. Modern C++: make_shared (Single Allocation)
+    measure_ns("Cpp_Make_Shared", ITERATIONS, baseline, []() {
         auto ptr = std::make_shared<ModernImpl>();
         do_not_optimize(ptr);
     });
@@ -115,13 +148,22 @@ int main() {
     IMyAsyncOp* raw_obj = new ManualComImpl();
     
     // 3. Virtual Method Call (COM ABI)
-    measure_ns("Cpp_Virtual_Call", ITERATIONS, [raw_obj]() {
+    measure_ns("Cpp_Virtual_Call", ITERATIONS, baseline, [raw_obj]() {
         int status;
         raw_obj->GetStatus(&status);
         do_not_optimize(status);
     });
 
     raw_obj->Release();
+
+    // 4. Native direct call
+    ModernImpl native;
+    measure_ns("Cpp_Native_Call", ITERATIONS, baseline, [&native]() {
+        int status = 0;
+        native.GetStatus(&status);
+        g_sink += status;
+        do_not_optimize(g_sink);
+    });
 
     return 0;
 }

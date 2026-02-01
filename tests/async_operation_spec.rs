@@ -16,7 +16,7 @@ mod async_operation_spec {
 
     #[cfg(not(feature = "driver"))]
     #[test]
-    fn spawn_cancellable_task_drops_pending_future_on_host() {
+    fn spawn_dpc_task_cancellable_drops_pending_future_on_host() {
         use core::future::Future;
         use core::pin::Pin;
         use core::sync::atomic::{AtomicUsize, Ordering};
@@ -45,8 +45,10 @@ mod async_operation_spec {
         }
 
         DROPS.store(0, Ordering::Relaxed);
-        let handle = kcom::spawn_cancellable_task(PendingWithDrop { _probe: DropProbe })
-            .expect("spawn_cancellable_task");
+        let handle = unsafe {
+            kcom::spawn_dpc_task_cancellable(PendingWithDrop { _probe: DropProbe })
+        }
+        .expect("spawn_dpc_task_cancellable");
         handle.cancel();
         drop(handle);
 

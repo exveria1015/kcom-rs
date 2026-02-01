@@ -8,8 +8,30 @@
 macro_rules! ensure {
     ($cond:expr, $status:expr $(,)?) => {
         if !$cond {
+            #[cfg(debug_assertions)]
+            $crate::trace::report_error(file!(), line!(), $status);
             return Err($status);
         }
+    };
+    ($cond:expr, $status:expr, $($arg:tt)+) => {
+        if !$cond {
+            #[cfg(debug_assertions)]
+            $crate::trace::report_error_msg(
+                file!(),
+                line!(),
+                $status,
+                core::format_args!($($arg)+),
+            );
+            return Err($status);
+        }
+    };
+}
+
+#[macro_export]
+/// Emits a trace event if a hook is installed.
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        $crate::trace::trace(core::format_args!($($arg)*));
     };
 }
 

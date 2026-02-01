@@ -175,8 +175,10 @@ mod tests {
     use crate::{declare_com_interface, impl_com_interface, impl_com_object, GUID, NTSTATUS, STATUS_SUCCESS};
     use crate::wrapper::ComObject;
     use core::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
 
     static DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[repr(C)]
     #[allow(non_snake_case)]
@@ -197,6 +199,7 @@ mod tests {
 
     #[test]
     fn from_raw_addref_balances_release() {
+        let _guard = TEST_LOCK.lock().unwrap();
         DROP_COUNT.store(0, Ordering::Relaxed);
         let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
 
@@ -214,6 +217,7 @@ mod tests {
 
     #[test]
     fn from_raw_consumes_reference() {
+        let _guard = TEST_LOCK.lock().unwrap();
         DROP_COUNT.store(0, Ordering::Relaxed);
         let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
 
@@ -225,6 +229,7 @@ mod tests {
 
     #[test]
     fn clone_adds_reference() {
+        let _guard = TEST_LOCK.lock().unwrap();
         DROP_COUNT.store(0, Ordering::Relaxed);
         let raw = ComObject::<Dummy, IUnknownVtbl>::new(Dummy).unwrap();
 
@@ -272,6 +277,7 @@ mod tests {
 
     #[test]
     fn query_interface_returns_comrc() {
+        let _guard = TEST_LOCK.lock().unwrap();
         let raw = Dummy::new_com(Dummy).unwrap();
         let com = unsafe { ComRc::<IFooRaw>::from_raw_addref(raw as *mut IFooRaw).unwrap() };
 

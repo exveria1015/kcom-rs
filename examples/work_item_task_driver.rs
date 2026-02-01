@@ -4,7 +4,7 @@ mod driver_only {
     use core::pin::Pin;
     use core::task::{Context, Poll};
 
-    use kcom::{spawn_work_item_task, spawn_work_item_task_cancellable};
+    use kcom::{spawn_task, spawn_task_cancellable};
     use kcom::NTSTATUS;
     use kcom::iunknown::{STATUS_NOT_SUPPORTED, STATUS_SUCCESS};
 
@@ -21,10 +21,10 @@ mod driver_only {
     pub fn run() {
         // In a real driver, pass a valid DEVICE_OBJECT from DriverEntry.
         let device = core::ptr::null_mut();
-        let status = spawn_work_item_task(device, ReadyOk);
+        let status = spawn_task(device, ReadyOk);
         let _ = status;
 
-        let handle = spawn_work_item_task_cancellable(device, ReadyOk);
+        let handle = spawn_task_cancellable(device, ReadyOk);
         let _ = handle.as_ref().map(|h| h.cancel());
 
         // STATUS_NOT_SUPPORTED is returned if no device was set.

@@ -60,6 +60,15 @@ pub struct OwnedUnicodeString<A: Allocator + Send + Sync = GlobalAllocator> {
     alloc: ManuallyDrop<A>,
 }
 
+/// A stack-backed UNICODE_STRING with a fixed UTF-16 buffer.
+///
+/// The buffer stores a trailing NUL. The returned UNICODE_STRING value is
+/// constructed on demand and borrows the internal buffer.
+pub struct LocalUnicodeString<const N: usize> {
+    buffer: [u16; N],
+    len: usize,
+}
+
 impl<A: Allocator + Send + Sync> OwnedUnicodeString<A> {
     pub fn new_in(value: &str, alloc: A) -> Result<Self, UnicodeStringError> {
         let len = value.encode_utf16().count();
@@ -111,6 +120,81 @@ impl<A: Allocator + Send + Sync> OwnedUnicodeString<A> {
     pub fn as_utf16(&self) -> &[u16] {
         let len = self.inner.Length as usize / 2;
         unsafe { slice::from_raw_parts(self.buffer, len) }
+    }
+}
+
+impl<const N: usize> LocalUnicodeString<N> {
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            buffer: [0; N],
+            len: 0,
+        }
+    }
+
+    pub fn from_str(value: &str) -> Result<Self, UnicodeStringError> {
+        let mut out = Self::new();
+        out.try_push_str(value)?;
+        Ok(out)
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.len = 0;
+        if !self.buffer.is_empty() {
+            self.buffer[0] = 0;
+        }
+    }
+
+    pub fn try_push_str(&mut self, value: &str) -> Result<(), UnicodeStringError> {
+        let max_units = (u16::MAX as usize) / 2;
+        let cap_units = core::cmp::min(N, max_units);
+        let value_len = value.encode_utf16().count();
+
+        if self.len + value_len + 1 > cap_units {
+            return Err(UnicodeStringError::TooLong);
+        }
+
+        for (idx, unit) in value.encode_utf16().enumerate() {
+            self.buffer[self.len + idx] = unit;
+        }
+        self.len += value_len;
+        if self.len < N {
+            self.buffer[self.len] = 0;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    pub fn as_unicode(&self) -> UNICODE_STRING {
+        let max_units = (u16::MAX as usize) / 2;
+        let cap_units = core::cmp::min(N, max_units);
+        UNICODE_STRING {
+            Length: (self.len * 2) as u16,
+            MaximumLength: (cap_units * 2) as u16,
+            Buffer: self.buffer.as_ptr() as *mut u16,
+        }
+    }
+
+    #[inline]
+    pub fn as_utf16(&self) -> &[u16] {
+        &self.buffer[..self.len]
+    }
+}
+
+impl<const N: usize> fmt::Write for LocalUnicodeString<N> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.try_push_str(s).map_err(|_| fmt::Error)
     }
 }
 
@@ -192,5 +276,24 @@ mod tests {
         unsafe {
             assert_eq!(*unicode.Buffer.add(len), 0);
         }
+    }
+
+    #[test]
+    fn local_unicode_string_from_str() {
+        let local = LocalUnicodeString::<8>::from_str("Test").expect("local string");
+        let unicode = local.as_unicode();
+        assert_eq!(unicode.Length, 8);
+        assert_eq!(unicode.MaximumLength, 16);
+        let slice = local.as_utf16();
+        assert_eq!(slice, "Test".encode_utf16().collect::<Vec<u16>>());
+    }
+
+    #[test]
+    fn local_unicode_string_fmt_write() {
+        let mut local = LocalUnicodeString::<16>::new();
+        use core::fmt::Write;
+        write!(&mut local, "Err: {:x}", 0x2a).expect("write");
+        let text = String::from_utf16(local.as_utf16()).expect("utf16");
+        assert_eq!(text, "Err: 2a");
     }
 }

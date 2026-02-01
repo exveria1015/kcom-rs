@@ -28,6 +28,7 @@ async-com-kernel = ["async-com", "wdk-sys"]
 kernel-unicode = ["utf16_lit", "wdk-sys"]
 driver = ["wdk-sys"]
 driver-test-stub = ["driver"]
+refcount-hardening = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(driver_model__driver_type, values("WDM", "KMDF"))'] }
@@ -44,7 +45,7 @@ name = "spawn_task_host"
 
 [[example]]
 name = "kernel_timer_future_driver"
-required-features = ["driver"]
+required-features = ["driver", "async-com-kernel"]
 
 [[example]]
 name = "work_item_task_driver"

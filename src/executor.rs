@@ -56,6 +56,8 @@ fn dummy_waker() -> core::task::Waker {
 use crate::iunknown::STATUS_INSUFFICIENT_RESOURCES;
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 use crate::allocator::{Allocator, KBox, PoolType, WdkAllocator};
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+use crate::refcount;
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 use crate::ntddk::{
@@ -160,7 +162,7 @@ unsafe fn clear_current_task(cpu_index: usize) {
 
 /// Returns true when the currently running DPC task has a cancellation request.
 ///
-/// Only valid inside tasks spawned by the DPC-based executor (spawn_task*). Work-item
+/// Only valid inside tasks spawned by the DPC-based executor (spawn_dpc_task*). Work-item
 /// tasks may migrate across CPUs, so this helper will not reliably track their state.
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 pub fn is_cancellation_requested() -> bool {
@@ -213,17 +215,14 @@ pub(crate) fn take_cancellation_request() -> bool {
 impl TaskHeader {
     #[inline]
     unsafe fn add_ref(ptr: NonNull<Self>) {
-        let _prev = unsafe { &*ptr.as_ptr() }
-            .ref_count
-            .fetch_add(1, Ordering::Relaxed);
+        let header = unsafe { &*ptr.as_ptr() };
+        let _ = refcount::add(&header.ref_count);
     }
 
     unsafe fn release(ptr: NonNull<Self>) {
-        let prev = unsafe { &*ptr.as_ptr() }
-            .ref_count
-            .fetch_sub(1, Ordering::Release);
-
-        if prev != 1 {
+        let header = unsafe { &*ptr.as_ptr() };
+        let count = refcount::sub(&header.ref_count);
+        if count != 0 {
             return;
         }
 
@@ -694,16 +693,14 @@ impl KernelTimerInner {
 
     #[inline]
     unsafe fn add_ref(ptr: NonNull<Self>) {
-        let _prev = unsafe { &*ptr.as_ptr() }
-            .ref_count
-            .fetch_add(1, Ordering::Relaxed);
+        let inner = unsafe { &*ptr.as_ptr() };
+        let _ = refcount::add(&inner.ref_count);
     }
 
     unsafe fn release(ptr: NonNull<Self>) {
-        let prev = unsafe { &*ptr.as_ptr() }
-            .ref_count
-            .fetch_sub(1, Ordering::Release);
-        if prev != 1 {
+        let inner = unsafe { &*ptr.as_ptr() };
+        let count = refcount::sub(&inner.ref_count);
+        if count != 0 {
             return;
         }
 
@@ -1064,16 +1061,14 @@ where
 
     #[inline]
     unsafe fn add_ref(ptr: NonNull<Self>) {
-        let _prev = unsafe { &*ptr.as_ptr() }
-            .ref_count
-            .fetch_add(1, Ordering::Relaxed);
+        let task = unsafe { &*ptr.as_ptr() };
+        let _ = refcount::add(&task.ref_count);
     }
 
     unsafe fn release(ptr: NonNull<Self>) {
-        let prev = unsafe { &*ptr.as_ptr() }
-            .ref_count
-            .fetch_sub(1, Ordering::Release);
-        if prev != 1 {
+        let task = unsafe { &*ptr.as_ptr() };
+        let count = refcount::sub(&task.ref_count);
+        if count != 0 {
             return;
         }
 
@@ -1273,7 +1268,7 @@ unsafe impl<F> Sync for WorkItemTask<F> where F: Future<Output = NTSTATUS> + Sen
 /// Note: ensure outstanding work items are drained before driver unload to
 /// avoid freeing device objects while work-item callbacks are still running.
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
-pub fn spawn_work_item_task<F>(device: *mut DEVICE_OBJECT, future: F) -> NTSTATUS
+pub fn spawn_task<F>(device: *mut DEVICE_OBJECT, future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
@@ -1297,7 +1292,7 @@ where
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM), tracking
 /// outstanding work so you can drain before unload.
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
-pub fn spawn_work_item_task_tracked<F>(
+pub fn spawn_task_tracked<F>(
     device: *mut DEVICE_OBJECT,
     tracker: &WorkItemTracker,
     future: F,
@@ -1327,7 +1322,7 @@ where
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM) and return a
 /// cancellation handle.
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
-pub fn spawn_work_item_task_cancellable<F>(
+pub fn spawn_task_cancellable<F>(
     device: *mut DEVICE_OBJECT,
     future: F,
 ) -> Result<WorkItemCancelHandle<F>, NTSTATUS>
@@ -1360,18 +1355,18 @@ where
     Ok(handle)
 }
 
-/// Spawn a future onto the kcom executor (driver build without async-com-kernel).
+/// Spawn a future onto the kcom DPC executor (driver build without async-com-kernel).
 #[cfg(all(feature = "driver", not(feature = "async-com-kernel")))]
-pub fn spawn_cancellable_task<F>(_future: F) -> Result<CancelHandle, NTSTATUS>
+pub unsafe fn spawn_dpc_task_cancellable<F>(_future: F) -> Result<CancelHandle, NTSTATUS>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
     Err(STATUS_NOT_SUPPORTED)
 }
 
-/// Spawn a future onto the kcom executor (host stub).
+/// Spawn a future onto the kcom DPC executor (host stub).
 #[cfg(not(feature = "driver"))]
-pub fn spawn_cancellable_task<F>(mut future: F) -> Result<CancelHandle, NTSTATUS>
+pub unsafe fn spawn_dpc_task_cancellable<F>(mut future: F) -> Result<CancelHandle, NTSTATUS>
 where
     F: Future<Output = NTSTATUS> + 'static,
 {
@@ -1386,7 +1381,7 @@ where
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM), tracking
 /// outstanding work and returning a cancellation handle.
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
-pub fn spawn_work_item_task_cancellable_tracked<F>(
+pub fn spawn_task_cancellable_tracked<F>(
     device: *mut DEVICE_OBJECT,
     tracker: &WorkItemTracker,
     future: F,
@@ -1422,7 +1417,7 @@ where
 
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (unsupported builds).
 #[cfg(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
-pub fn spawn_work_item_task_cancellable_tracked<F>(
+pub fn spawn_task_cancellable_tracked<F>(
     _device: *mut DEVICE_OBJECT,
     _tracker: &WorkItemTracker,
     _future: F,
@@ -1534,9 +1529,9 @@ unsafe fn task_tracker_complete(tracker: *const TaskTracker) {
 ///
 /// # Driver unload
 /// Untracked tasks can outlive driver unload. Prefer
-/// [`spawn_cancellable_task_tracked`] with a [`TaskTracker`] and call
+/// [`spawn_dpc_task_cancellable_tracked`] with a [`TaskTracker`] and call
 /// [`TaskTracker::drain`] during unload.
-pub fn spawn_cancellable_task<F>(future: F) -> Result<CancelHandle, NTSTATUS>
+pub unsafe fn spawn_dpc_task_cancellable<F>(future: F) -> Result<CancelHandle, NTSTATUS>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
@@ -1563,7 +1558,7 @@ where
 /// Call [`TaskTracker::drain`] after stopping submissions to ensure all tracked
 /// tasks have completed before unload.
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
-pub fn spawn_cancellable_task_tracked<F>(
+pub unsafe fn spawn_dpc_task_cancellable_tracked<F>(
     tracker: &TaskTracker,
     future: F,
 ) -> Result<CancelHandle, NTSTATUS>
@@ -1593,16 +1588,16 @@ where
 /// This function requires a [`TaskTracker`] to ensure all tasks have completed
 /// before unload.
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
-pub fn spawn_task<F>(tracker: &TaskTracker, future: F) -> NTSTATUS
+pub unsafe fn spawn_dpc_task<F>(tracker: &TaskTracker, future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
-    spawn_task_tracked(tracker, future)
+    spawn_dpc_task_tracked(tracker, future)
 }
 
 /// Compatibility wrapper for spawning a tracked DPC task.
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
-pub fn spawn_task_tracked<F>(tracker: &TaskTracker, future: F) -> NTSTATUS
+pub unsafe fn spawn_dpc_task_tracked<F>(tracker: &TaskTracker, future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {

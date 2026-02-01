@@ -99,6 +99,10 @@ where
 pub trait PinInit<T, E> {
     /// # Safety
     /// `ptr` must be valid for writes and aligned for `T`.
+    ///
+    /// If `init` returns `Err`, the memory at `ptr` must be left uninitialized
+    /// (or cleaned up by the implementor). Callers may deallocate without
+    /// running `Drop` on `T`.
     unsafe fn init(&mut self, ptr: *mut T) -> Result<(), E>;
 }
 
@@ -112,6 +116,8 @@ impl<F> PinInitOnce<F> {
         Self { init: Some(init) }
     }
 }
+
+// NOTE: `PinInitOnce` assumes the closure leaves `ptr` uninitialized on error.
 
 impl<T, E, F> PinInit<T, E> for PinInitOnce<F>
 where
@@ -424,6 +430,8 @@ unsafe fn ex_allocate_pool_uninitialized(pool: PoolType, size: usize, tag: u32) 
     if let Some(func) = unsafe { get_ex_allocate_pool2() } {
         return unsafe { func(flags, size, tag) };
     }
+    // ExAllocatePoolWithTag returns uninitialized memory by default, so the
+    // UNINITIALIZED intent is preserved even though flags are not passed.
     let pool_type = match pool {
         PoolType::NonPagedNx => POOL_TYPE_NON_PAGED_NX,
         PoolType::Paged => POOL_TYPE_PAGED,

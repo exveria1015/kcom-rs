@@ -1,6 +1,6 @@
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 mod driver_only {
-    use kcom::{spawn_task, KernelTimerFuture, NTSTATUS, STATUS_SUCCESS, TaskTracker};
+    use kcom::{spawn_dpc_task, KernelTimerFuture, NTSTATUS, STATUS_SUCCESS, TaskTracker};
 
     pub fn run() -> NTSTATUS {
         let fut = async move {
@@ -13,20 +13,20 @@ mod driver_only {
         };
 
         let tracker = TaskTracker::new();
-        let status = spawn_task(&tracker, fut);
+        let status = unsafe { spawn_dpc_task(&tracker, fut) };
         tracker.drain();
         status
     }
 }
 
 fn main() {
-    #[cfg(feature = "driver")]
+    #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
     {
         let status = driver_only::run();
         let _ = status;
     }
 
-    #[cfg(not(feature = "driver"))]
+    #[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
     {
     }
 }

@@ -14,23 +14,25 @@ use crate::iunknown::{
 use crate::smart_ptr::{ComInterface, ComRc};
 use crate::traits::ComImpl;
 use crate::vtable::{ComInterfaceInfo, InterfaceVtable};
+use crate::refcount;
 
 #[inline]
 unsafe fn delegating_add_ref(
-    outer_unknown: Option<*mut IUnknownVtbl>,
+    outer_unknown: Option<*mut c_void>,
     ref_count: &AtomicU32,
 ) -> u32 {
     if let Some(outer) = outer_unknown {
         if !outer.is_null() {
-            return unsafe { ((*outer).AddRef)(outer as *mut c_void) };
+            let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
+            return unsafe { ((*vtbl).AddRef)(outer) };
         }
     }
-    ref_count.fetch_add(1, Ordering::Relaxed) + 1
+    refcount::add(ref_count)
 }
 
 #[inline]
 unsafe fn delegating_release<F>(
-    outer_unknown: Option<*mut IUnknownVtbl>,
+    outer_unknown: Option<*mut c_void>,
     ref_count: &AtomicU32,
     release_inner: F,
 ) -> u32
@@ -39,11 +41,12 @@ where
 {
     if let Some(outer) = outer_unknown {
         if !outer.is_null() {
-            return unsafe { ((*outer).Release)(outer as *mut c_void) };
+            let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
+            return unsafe { ((*vtbl).Release)(outer) };
         }
     }
 
-    let count = ref_count.fetch_sub(1, Ordering::Release) - 1;
+    let count = refcount::sub(ref_count);
     if count == 0 {
         core::sync::atomic::fence(Ordering::Acquire);
         release_inner();
@@ -248,7 +251,7 @@ where
     secondaries: S::Entries,
     non_delegating_unknown: NonDelegatingIUnknownN<T, P, S, A>,
     ref_count: AtomicU32,
-    outer_unknown: Option<*mut IUnknownVtbl>,
+    outer_unknown: Option<*mut c_void>,
     pub inner: T,
     alloc: ManuallyDrop<A>,
 }
@@ -383,6 +386,15 @@ where
             let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
             core::ptr::drop_in_place(&mut (*ptr).inner);
+            #[cfg(debug_assertions)]
+            {
+                let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+                debug_assert_eq!(
+                    resurrected,
+                    0,
+                    "ComObject resurrected during Drop; this is unsupported"
+                );
+            }
             alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
         })
@@ -400,7 +412,8 @@ where
         let wrapper = unsafe { Self::from_ptr(this) };
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
-                return unsafe { ((*outer).QueryInterface)(outer as *mut c_void, riid, ppv) };
+                let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
+                return unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
             }
         }
 
@@ -472,7 +485,8 @@ where
         let primary = wrapper as *const _ as *mut c_void;
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
-                return unsafe { ((*outer).QueryInterface)(outer as *mut c_void, riid, ppv) };
+                let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
+                return unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
             }
         }
 
@@ -504,7 +518,7 @@ where
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_add_ref(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_non_delegating(this) };
-        wrapper.ref_count.fetch_add(1, Ordering::Relaxed) + 1
+        refcount::add(&wrapper.ref_count)
     }
 
     #[allow(non_snake_case)]
@@ -512,7 +526,7 @@ where
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_non_delegating(this) };
-        let count = wrapper.ref_count.fetch_sub(1, Ordering::Release) - 1;
+        let count = refcount::sub(&wrapper.ref_count);
 
         if count == 0 {
             core::sync::atomic::fence(Ordering::Acquire);
@@ -521,6 +535,15 @@ where
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
                 core::ptr::drop_in_place(&mut (*ptr).inner);
+                #[cfg(debug_assertions)]
+                {
+                    let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+                    debug_assert_eq!(
+                        resurrected,
+                        0,
+                        "ComObject resurrected during Drop; this is unsupported"
+                    );
+                }
                 alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }
             drop(alloc);
@@ -581,7 +604,7 @@ where
     vtable: &'static I,
     non_delegating_unknown: NonDelegatingIUnknown<T, I, A>,
     ref_count: AtomicU32,
-    outer_unknown: Option<*mut IUnknownVtbl>,
+    outer_unknown: Option<*mut c_void>,
     pub inner: T,
     alloc: ManuallyDrop<A>,
 }
@@ -674,11 +697,11 @@ where
     /// unknown, while this non-delegating pointer updates the inner refcount directly.
     ///
     /// # Safety
-    /// `outer_unknown` must point to a valid outer IUnknown vtable.
+    /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
     #[inline]
     pub fn new_aggregated_in(
         inner: T,
-        outer_unknown: *mut IUnknownVtbl,
+        outer_unknown: *mut c_void,
         alloc: A,
     ) -> Result<*mut c_void, NTSTATUS> {
         Self::try_new_aggregated_in(inner, outer_unknown, alloc)
@@ -688,7 +711,7 @@ where
     #[inline]
     pub fn try_new_aggregated_in(
         inner: T,
-        outer_unknown: *mut IUnknownVtbl,
+        outer_unknown: *mut c_void,
         alloc: A,
     ) -> Option<*mut c_void> {
         let ptr = unsafe { alloc.alloc(Self::LAYOUT) } as *mut Self;
@@ -763,6 +786,15 @@ where
             let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
             core::ptr::drop_in_place(&mut (*ptr).inner);
+            #[cfg(debug_assertions)]
+            {
+                let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+                debug_assert_eq!(
+                    resurrected,
+                    0,
+                    "ComObjectN resurrected during Drop; this is unsupported"
+                );
+            }
             alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
         })
@@ -780,7 +812,8 @@ where
         let wrapper = unsafe { Self::from_ptr(this) };
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
-                return unsafe { ((*outer).QueryInterface)(outer as *mut c_void, riid, ppv) };
+                let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
+                return unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
             }
         }
 
@@ -812,7 +845,7 @@ where
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_add_ref(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_non_delegating(this) };
-        wrapper.ref_count.fetch_add(1, Ordering::Relaxed) + 1
+        refcount::add(&wrapper.ref_count)
     }
 
     #[allow(non_snake_case)]
@@ -820,7 +853,7 @@ where
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
         let wrapper = unsafe { Self::from_non_delegating(this) };
-        let count = wrapper.ref_count.fetch_sub(1, Ordering::Release) - 1;
+        let count = refcount::sub(&wrapper.ref_count);
 
         if count == 0 {
             core::sync::atomic::fence(Ordering::Acquire);
@@ -829,6 +862,15 @@ where
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
                 core::ptr::drop_in_place(&mut (*ptr).inner);
+                #[cfg(debug_assertions)]
+                {
+                    let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+                    debug_assert_eq!(
+                        resurrected,
+                        0,
+                        "ComObjectN resurrected during Drop; this is unsupported"
+                    );
+                }
                 alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }
             drop(alloc);
@@ -908,18 +950,18 @@ where
     }
 
     /// # Safety
-    /// `outer_unknown` must point to a valid outer IUnknown vtable.
+    /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
     #[inline]
-    pub fn new_aggregated(inner: T, outer_unknown: *mut IUnknownVtbl) -> Result<*mut c_void, NTSTATUS> {
+    pub fn new_aggregated(inner: T, outer_unknown: *mut c_void) -> Result<*mut c_void, NTSTATUS> {
         Self::new_aggregated_in(inner, outer_unknown, GlobalAllocator)
     }
 
     /// # Safety
-    /// `outer_unknown` must point to a valid outer IUnknown vtable.
+    /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
     #[inline]
     pub fn try_new_aggregated(
         inner: T,
-        outer_unknown: *mut IUnknownVtbl,
+        outer_unknown: *mut c_void,
     ) -> Option<*mut c_void> {
         Self::try_new_aggregated_in(inner, outer_unknown, GlobalAllocator)
     }
@@ -936,24 +978,33 @@ mod tests {
     static OUTER_RELEASE_COUNT: AtomicU32 = AtomicU32::new(0);
     static OUTER_QUERY_COUNT: AtomicU32 = AtomicU32::new(0);
 
-    unsafe extern "system" fn outer_add_ref(_this: *mut core::ffi::c_void) -> u32 {
+    unsafe extern "system" fn outer_add_ref(this: *mut core::ffi::c_void) -> u32 {
+        assert!(!this.is_null());
         OUTER_ADDREF_COUNT.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    unsafe extern "system" fn outer_release(_this: *mut core::ffi::c_void) -> u32 {
+    unsafe extern "system" fn outer_release(this: *mut core::ffi::c_void) -> u32 {
+        assert!(!this.is_null());
         OUTER_RELEASE_COUNT.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     unsafe extern "system" fn outer_query_interface(
-        _this: *mut core::ffi::c_void,
+        this: *mut core::ffi::c_void,
         _riid: *const GUID,
         ppv: *mut *mut core::ffi::c_void,
     ) -> NTSTATUS {
+        assert!(!this.is_null());
         OUTER_QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if !ppv.is_null() {
             unsafe { *ppv = core::ptr::null_mut() };
         }
         STATUS_NOINTERFACE
+    }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct OuterUnknown {
+        lpVtbl: *const IUnknownVtbl,
     }
 
     static OUTER_VTBL: IUnknownVtbl = IUnknownVtbl {
@@ -1018,9 +1069,12 @@ mod tests {
         OUTER_RELEASE_COUNT.store(0, Ordering::Relaxed);
         OUTER_QUERY_COUNT.store(0, Ordering::Relaxed);
 
+        let outer = OuterUnknown {
+            lpVtbl: &OUTER_VTBL as *const _,
+        };
         let ptr = ComObject::<Dummy, IUnknownVtbl>::new_aggregated(
             Dummy,
-            &OUTER_VTBL as *const _ as *mut _,
+            &outer as *const _ as *mut core::ffi::c_void,
         )
         .unwrap();
 
