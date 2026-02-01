@@ -51,6 +51,7 @@ impl IBar for Multi {
 impl_com_interface! {
     impl Multi: IFoo {
         parent = IUnknownVtbl,
+        secondaries = (IBar),
         methods = [foo],
     }
 }
@@ -58,9 +59,9 @@ impl_com_interface! {
 impl_com_interface_multiple! {
     impl Multi: IBar {
         parent = IUnknownVtbl,
-        primary = IFooVtbl,
+        primary = IFoo,
         index = 0,
-        secondaries = (IBarVtbl,),
+        secondaries = (IBar),
         methods = [bar],
     }
 }

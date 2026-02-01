@@ -143,6 +143,7 @@ use kcom::wrapper::ComObjectN;
 impl_com_interface! {
     impl Multi: IFoo {
         parent = IUnknownVtbl,
+        secondaries = (IBar, IBaz),
         methods = [foo],
     }
 }
@@ -150,9 +151,9 @@ impl_com_interface! {
 impl_com_interface_multiple! {
     impl Multi: IBar {
         parent = IUnknownVtbl,
-        primary = IFooVtbl,
+        primary = IFoo,
         index = 0,
-        secondaries = (IBarVtbl, IBazVtbl),
+        secondaries = (IBar, IBaz),
         methods = [bar],
     }
 }
@@ -160,9 +161,9 @@ impl_com_interface_multiple! {
 impl_com_interface_multiple! {
     impl Multi: IBaz {
         parent = IUnknownVtbl,
-        primary = IFooVtbl,
+        primary = IFoo,
         index = 1,
-        secondaries = (IBarVtbl, IBazVtbl),
+        secondaries = (IBar, IBaz),
         methods = [baz],
     }
 }

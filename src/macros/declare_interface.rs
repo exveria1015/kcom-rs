@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+
 #[macro_export]
 /// Declares a COM interface trait and generates its vtable definition.
 ///
@@ -21,8 +22,9 @@ macro_rules! declare_com_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($crate::IUnknown),
+            parent_kind (IUnknown),
             parent_vtable (<
-                $crate::IUnknownInterface as $crate::traits::ComInterfaceInfo
+                $crate::IUnknownInterface as $crate::vtable::ComInterfaceInfo
             >::Vtable),
             iid ($guid),
             methods { $($methods)* }
@@ -41,501 +43,12 @@ macro_rules! declare_com_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
+            parent_kind (Other),
             parent_vtable (<
-                [<$parent_trait Interface>] as $crate::traits::ComInterfaceInfo
+                [<$parent_trait Interface>] as $crate::vtable::ComInterfaceInfo
             >::Vtable),
             iid ($guid),
             methods { $($methods)* }
-        }
-    };
-}
-
-#[macro_export]
-/// Implements `ComImpl::query_interface` for a single primary interface.
-///
-/// Additional interfaces must provide explicit pointers (tear-offs or aggregated objects).
-/// Returning `this` is only valid when the caller will interpret the vtable at offset 0
-/// as the requested interface.
-macro_rules! impl_query_interface {
-    (
-        $ty:ty,
-        $this:ident,
-        $riid:ident,
-        [$primary:ident $(=> $primary_ptr:expr)? $(, $iface:ident => $ptr:expr)* $(,)?],
-        fallback = $fallback:ty $(,)?
-    ) => {
-        #[inline]
-        fn query_interface(
-            &self,
-            $this: *mut core::ffi::c_void,
-            $riid: &$crate::GUID,
-        ) -> Option<*mut core::ffi::c_void> {
-            $crate::paste::paste! {
-                if *$riid == <[<$primary Interface>] as $crate::traits::ComInterfaceInfo>::IID {
-                    return $crate::impl_query_interface!(@return $this $(, $primary_ptr)?);
-                }
-                $(
-                    if *$riid == <[<$iface Interface>] as $crate::traits::ComInterfaceInfo>::IID {
-                        return $crate::impl_query_interface!(@return $this, $ptr);
-                    }
-                )*
-            }
-            <Self as $crate::traits::ComImpl<$fallback>>::query_interface(self, $this, $riid)
-        }
-    };
-    (@return $this:ident, this) => {{
-        debug_assert!(!$this.is_null(), "query_interface returned null for primary interface");
-        Some($this)
-    }};
-    (@return $this:ident, $ptr:expr) => {{
-        let ptr = $ptr as *mut core::ffi::c_void;
-        if ptr.is_null() {
-            debug_assert!(!ptr.is_null(), "query_interface returned null pointer");
-            None
-        } else {
-            Some(ptr)
-        }
-    }};
-    (@return $this:ident) => {{
-        debug_assert!(!$this.is_null(), "query_interface returned null for primary interface");
-        Some($this)
-    }};
-}
-
-#[macro_export]
-/// Implements `ComImpl` and builds the VTABLE for a declared COM interface.
-///
-/// Defaults to using the primary interface for `QueryInterface` and the parent
-/// vtable type as the fallback.
-macro_rules! impl_com_interface {
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            methods = [$($method:ident),* $(,)?],
-            this = $this:ident,
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface!(
-            @impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            $this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            methods = [$($method:ident),* $(,)?],
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface!(
-            @impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            methods = [$($method:ident),* $(,)?],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface!(
-            @impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            [$($method),*],
-            [$trait_name],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (@fallback $parent_vtbl:ty) => { $parent_vtbl };
-    (@fallback $parent_vtbl:ty, $fallback:ty) => { $fallback };
-    (@parent IUnknownVtbl, $ty:ty, $trait_name:ident) => {{
-        $crate::paste::paste! {
-            $crate::IUnknownVtbl {
-                QueryInterface: $crate::wrapper::ComObject::<$ty, [<$trait_name Vtbl>]>::shim_query_interface,
-                AddRef: $crate::wrapper::ComObject::<$ty, [<$trait_name Vtbl>]>::shim_add_ref,
-                Release: $crate::wrapper::ComObject::<$ty, [<$trait_name Vtbl>]>::shim_release,
-            }
-        }
-    }};
-    (@parent $parent_vtbl:ty, $ty:ty, $trait_name:ident) => {
-        *<$ty as $crate::ComImpl<$parent_vtbl>>::VTABLE
-    };
-    (@impl
-        $ty:ty,
-        $trait_name:ident,
-        $parent_vtbl:ty,
-        [$($method:ident),*],
-        [$($qi:tt)+],
-        $fallback:ty,
-        $this:ident
-    ) => {
-        $crate::paste::paste! {
-            impl $crate::ComImpl<[<$trait_name Vtbl>]> for $ty {
-                const VTABLE: &'static [<$trait_name Vtbl>] = &[<$trait_name Vtbl>] {
-                    parent: $crate::impl_com_interface!(@parent $parent_vtbl, $ty, $trait_name),
-                    $($method: [<shim_ $trait_name _ $method>]::<$ty>,)*
-                };
-
-                $crate::impl_query_interface! {
-                    Self,
-                    $this,
-                    riid,
-                    [$($qi)+],
-                    fallback = $fallback
-                }
-            }
-        }
-    };
-}
-
-#[macro_export]
-/// Implements `ComImpl` and builds the VTABLE for a non-primary interface on `ComObjectN`.
-///
-/// Provide the primary interface vtable, secondary tuple type, and allocator type so secondary
-/// shims can locate the object. Use `index` to select the entry in the `secondaries` tuple.
-macro_rules! impl_com_interface_multiple {
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            secondaries = $secondaries:ty,
-            allocator = $alloc:ty,
-            methods = [$($method:ident),* $(,)?],
-            this = $this:ident,
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            $secondaries,
-            $alloc,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            $this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            secondaries = $secondaries:ty,
-            allocator = $alloc:ty,
-            methods = [$($method:ident),* $(,)?],
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            $secondaries,
-            $alloc,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            secondaries = $secondaries:ty,
-            allocator = $alloc:ty,
-            methods = [$($method:ident),* $(,)?],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            $secondaries,
-            $alloc,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$trait_name],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            secondaries = $secondaries:ty,
-            methods = [$($method:ident),* $(,)?],
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            $secondaries,
-            $crate::allocator::GlobalAllocator,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            secondaries = $secondaries:ty,
-            methods = [$($method:ident),* $(,)?],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            $secondaries,
-            $crate::allocator::GlobalAllocator,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$trait_name],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            allocator = $alloc:ty,
-            methods = [$($method:ident),* $(,)?],
-            this = $this:ident,
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            ([<$trait_name Vtbl>],),
-            $alloc,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            $this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            allocator = $alloc:ty,
-            methods = [$($method:ident),* $(,)?],
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            ([<$trait_name Vtbl>],),
-            $alloc,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            allocator = $alloc:ty,
-            methods = [$($method:ident),* $(,)?],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            ([<$trait_name Vtbl>],),
-            $alloc,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$trait_name],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            methods = [$($method:ident),* $(,)?],
-            qi = [$($qi:tt)+],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            ([<$trait_name Vtbl>],),
-            $crate::allocator::GlobalAllocator,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$($qi)+],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (
-        impl $ty:ty: $trait_name:ident {
-            parent = $parent_vtbl:ty,
-            primary = $primary_vtbl:ty,
-            $(index = $index:expr,)?
-            methods = [$($method:ident),* $(,)?],
-            $(fallback = $fallback:ty,)?
-        }
-    ) => {
-        $crate::impl_com_interface_multiple!(@impl
-            $ty,
-            $trait_name,
-            $parent_vtbl,
-            $primary_vtbl,
-            ([<$trait_name Vtbl>],),
-            $crate::allocator::GlobalAllocator,
-            $crate::impl_com_interface_multiple!(@index $( $index )?),
-            [$($method),*],
-            [$trait_name],
-            $crate::impl_com_interface!(@fallback $parent_vtbl $(, $fallback)?),
-            this
-        );
-    };
-    (@index $index:expr) => { $index };
-    (@index) => { 0usize };
-    (@parent IUnknownVtbl, $ty:ty, $trait_name:ident, $primary_vtbl:ty, $secondaries:ty, $alloc:ty, $index:expr) => {{
-        $crate::paste::paste! {
-            $crate::IUnknownVtbl {
-                // Ensure $index is evaluated as a const block/expression
-                QueryInterface: $crate::wrapper::ComObjectN::<$ty, $primary_vtbl, $secondaries, $alloc>::shim_query_interface_secondary::<[<$trait_name Vtbl>], { $index }>,
-                AddRef: $crate::wrapper::ComObjectN::<$ty, $primary_vtbl, $secondaries, $alloc>::shim_add_ref_secondary::<[<$trait_name Vtbl>], { $index }>,
-                Release: $crate::wrapper::ComObjectN::<$ty, $primary_vtbl, $secondaries, $alloc>::shim_release_secondary::<[<$trait_name Vtbl>], { $index }>,
-            }
-        }
-    }};
-    (@parent $parent_vtbl:ty, $ty:ty, $trait_name:ident, $primary_vtbl:ty, $secondaries:ty, $alloc:ty, $index:expr) => {
-        *<$ty as $crate::ComImpl<$parent_vtbl>>::VTABLE
-    };
-    (@impl
-        $ty:ty,
-        $trait_name:ident,
-        $parent_vtbl:ty,
-        $primary_vtbl:ty,
-        $secondaries:ty,
-        $alloc:ty,
-        $index:expr,
-        [$($method:ident),*],
-        [$($qi:tt)+],
-        $fallback:ty,
-        $this:ident
-    ) => {
-        $crate::paste::paste! {
-            impl $crate::ComImpl<[<$trait_name Vtbl>]> for $ty {
-                const VTABLE: &'static [<$trait_name Vtbl>] = &[<$trait_name Vtbl>] {
-                    parent: $crate::impl_com_interface_multiple!(
-                        @parent $parent_vtbl,
-                        $ty,
-                        $trait_name,
-                        $primary_vtbl,
-                        $secondaries,
-                        $alloc,
-                        $index
-                    ),
-                    // Use brace wrapping { $index } to ensure macro expansion results (like 0usize from @index)
-                    // are treated as const expressions, not types or raw tokens.
-                    $($method: [<shim_ $trait_name _ $method _secondary>]::<$ty, $primary_vtbl, $secondaries, $alloc, { $index }>,)*
-                };
-
-                $crate::impl_query_interface! {
-                    Self,
-                    $this,
-                    riid,
-                    [$($qi)+],
-                    fallback = $fallback
-                }
-            }
-        }
-    };
-}
-
-#[macro_export]
-/// Returns early with `Err(status)` when `cond` is false.
-macro_rules! ensure {
-    ($cond:expr, $status:expr $(,)?) => {
-        if !$cond {
-            return Err($status);
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! iunknown_vtbl {
-    ($ty:ty, $vtbl:ty $(,)?) => {
-        $crate::IUnknownVtbl {
-            QueryInterface: $crate::wrapper::ComObject::<$ty, $vtbl>::shim_query_interface,
-            AddRef: $crate::wrapper::ComObject::<$ty, $vtbl>::shim_add_ref,
-            Release: $crate::wrapper::ComObject::<$ty, $vtbl>::shim_release,
         }
     };
 }
@@ -548,6 +61,7 @@ macro_rules! __kcom_define_interface {
         vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
+        parent_kind ($parent_kind:ident),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
         methods { $($methods:tt)* }
@@ -558,12 +72,15 @@ macro_rules! __kcom_define_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
+            parent_kind ($parent_kind),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [],
             trait_safety [],
             trait_methods [],
             vtable_fields [],
+            vtable_inits [],
+            vtable_inits_secondary [],
             shim_funcs [],
             ;
             $($methods)*
@@ -575,12 +92,15 @@ macro_rules! __kcom_define_interface {
         vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
+        parent_kind ($parent_kind:ident),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
         trait_docs [$($trait_docs:tt)*],
         trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
+        vtable_inits [$($vtable_inits:tt)*],
+        vtable_inits_secondary [$($vtable_inits_secondary:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
         ;
     ) => {
@@ -601,6 +121,41 @@ macro_rules! __kcom_define_interface {
                 $($vtable_fields)*
             }
 
+            impl [<$trait_name Vtbl>] {
+                pub const fn new<T>() -> Self
+                where
+                    T: $trait_name
+                        + $crate::ComImpl<[<$trait_name Vtbl>]>
+                        + $crate::ComImpl<$($parent_vtable)+>,
+                {
+                    Self {
+                        parent: $crate::__kcom_parent_vtbl!(
+                            $parent_kind,
+                            $($parent_vtable)+,
+                            T,
+                            [<$trait_name Vtbl>]
+                        ),
+                        $($vtable_inits)*
+                    }
+                }
+
+                $crate::__kcom_vtbl_impl_primary!(
+                    $parent_kind,
+                    $trait_name,
+                    [<$trait_name Vtbl>],
+                    $($parent_vtable)+,
+                    { $($vtable_inits)* }
+                );
+
+                $crate::__kcom_vtbl_impl_secondary!(
+                    $parent_kind,
+                    $trait_name,
+                    [<$trait_name Vtbl>],
+                    $($parent_vtable)+,
+                    { $($vtable_inits_secondary)* }
+                );
+            }
+
             #[repr(C)]
             #[derive(Clone, Copy)]
             #[allow(non_snake_case)]
@@ -610,7 +165,7 @@ macro_rules! __kcom_define_interface {
 
             unsafe impl $crate::ComInterface for [<$trait_name Raw>] {}
 
-            impl $crate::traits::ComInterfaceInfo for [<$trait_name Raw>] {
+            impl $crate::vtable::ComInterfaceInfo for [<$trait_name Raw>] {
                 type Vtable = [<$trait_name Vtbl>];
                 const IID: $crate::GUID = $guid;
                 const IID_STR: &'static str = stringify!($guid);
@@ -622,7 +177,7 @@ macro_rules! __kcom_define_interface {
                 #[inline]
                 pub fn query_interface<U>(&self) -> $crate::StatusResult<$crate::ComRc<U>>
                 where
-                    U: $crate::smart_ptr::ComInterface + $crate::traits::ComInterfaceInfo,
+                    U: $crate::smart_ptr::ComInterface + $crate::vtable::ComInterfaceInfo,
                 {
                     let mut out = core::ptr::null_mut();
                     let vtbl = unsafe { *(self as *const _ as *mut *mut $crate::IUnknownVtbl) };
@@ -661,13 +216,13 @@ macro_rules! __kcom_define_interface {
 
             $vis struct [<$trait_name Interface>];
 
-            impl $crate::traits::ComInterfaceInfo for [<$trait_name Interface>] {
+            impl $crate::vtable::ComInterfaceInfo for [<$trait_name Interface>] {
                 type Vtable = [<$trait_name Vtbl>];
                 const IID: $crate::GUID = $guid;
                 const IID_STR: &'static str = stringify!($guid);
             }
 
-            unsafe impl $crate::traits::InterfaceVtable for [<$trait_name Vtbl>] {}
+            unsafe impl $crate::vtable::InterfaceVtable for [<$trait_name Vtbl>] {}
 
             $($shim_funcs)*
         }
@@ -678,12 +233,15 @@ macro_rules! __kcom_define_interface {
         vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
+        parent_kind ($parent_kind:ident),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
         trait_docs [$($trait_docs:tt)*],
         trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
+        vtable_inits [$($vtable_inits:tt)*],
+        vtable_inits_secondary [$($vtable_inits_secondary:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
         ;
         $(#[$method_attr:meta])* async fn $method_name:ident(&self $(, $arg_name:ident : $arg_ty:ty)*) -> $ret_ty:ty; $($rest:tt)*
@@ -694,6 +252,7 @@ macro_rules! __kcom_define_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
+            parent_kind ($parent_kind),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [
@@ -730,6 +289,12 @@ macro_rules! __kcom_define_interface {
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::__kcom_vtable_ret!($ret_ty),
             ],
+            vtable_inits [
+                $($vtable_inits)*
+            ],
+            vtable_inits_secondary [
+                $($vtable_inits_secondary)*
+            ],
             shim_funcs [
                 $($shim_funcs)*
                 #[cfg(not(feature = "async-com"))]
@@ -749,12 +314,15 @@ macro_rules! __kcom_define_interface {
         vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
+        parent_kind ($parent_kind:ident),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
         trait_docs [$($trait_docs:tt)*],
         trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
+        vtable_inits [$($vtable_inits:tt)*],
+        vtable_inits_secondary [$($vtable_inits_secondary:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
         ;
         $(#[$method_attr:meta])* fn $method_name:ident(&self $(, $arg_name:ident : $arg_ty:ty)*) -> Result<$ok:ty, $err:ty>; $($rest:tt)*
@@ -765,6 +333,7 @@ macro_rules! __kcom_define_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
+            parent_kind ($parent_kind),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [$($trait_docs)*],
@@ -780,6 +349,14 @@ macro_rules! __kcom_define_interface {
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS,
             ],
+            vtable_inits [
+                $($vtable_inits)*
+                $method_name: [<shim_ $trait_name _ $method_name>]::<T>,
+            ],
+            vtable_inits_secondary [
+                $($vtable_inits_secondary)*
+                $method_name: [<shim_ $trait_name _ $method_name _secondary>]::<T, P, S, A, INDEX>,
+            ],
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
@@ -802,7 +379,7 @@ macro_rules! __kcom_define_interface {
                 ) -> $crate::NTSTATUS
                 where
                     T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
-                    P: $crate::traits::InterfaceVtable,
+                    P: $crate::vtable::InterfaceVtable,
                     S: $crate::wrapper::SecondaryVtables,
                     S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, [<$trait_name Vtbl>]>,
                     A: $crate::allocator::Allocator + Send + Sync,
@@ -823,12 +400,15 @@ macro_rules! __kcom_define_interface {
         vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
+        parent_kind ($parent_kind:ident),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
         trait_docs [$($trait_docs:tt)*],
         trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
+        vtable_inits [$($vtable_inits:tt)*],
+        vtable_inits_secondary [$($vtable_inits_secondary:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
         ;
         $(#[$method_attr:meta])* fn $method_name:ident(&self $(, $arg_name:ident : $arg_ty:ty)*) -> ::core::result::Result<$ok:ty, $err:ty>; $($rest:tt)*
@@ -839,6 +419,7 @@ macro_rules! __kcom_define_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
+            parent_kind ($parent_kind),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [$($trait_docs)*],
@@ -854,6 +435,14 @@ macro_rules! __kcom_define_interface {
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS,
             ],
+            vtable_inits [
+                $($vtable_inits)*
+                $method_name: [<shim_ $trait_name _ $method_name>]::<T>,
+            ],
+            vtable_inits_secondary [
+                $($vtable_inits_secondary)*
+                $method_name: [<shim_ $trait_name _ $method_name _secondary>]::<T, P, S, A, INDEX>,
+            ],
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
@@ -876,7 +465,7 @@ macro_rules! __kcom_define_interface {
                 ) -> $crate::NTSTATUS
                 where
                     T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
-                    P: $crate::traits::InterfaceVtable,
+                    P: $crate::vtable::InterfaceVtable,
                     S: $crate::wrapper::SecondaryVtables,
                     S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, [<$trait_name Vtbl>]>,
                     A: $crate::allocator::Allocator + Send + Sync,
@@ -897,12 +486,15 @@ macro_rules! __kcom_define_interface {
         vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
+        parent_kind ($parent_kind:ident),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
         trait_docs [$($trait_docs:tt)*],
         trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
+        vtable_inits [$($vtable_inits:tt)*],
+        vtable_inits_secondary [$($vtable_inits_secondary:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
         ;
         $(#[$method_attr:meta])* fn $method_name:ident(&self $(, $arg_name:ident : $arg_ty:ty)*) -> ::std::result::Result<$ok:ty, $err:ty>; $($rest:tt)*
@@ -913,6 +505,7 @@ macro_rules! __kcom_define_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
+            parent_kind ($parent_kind),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [$($trait_docs)*],
@@ -928,6 +521,14 @@ macro_rules! __kcom_define_interface {
                     $(, $arg_name: $arg_ty)*
                 ) -> $crate::NTSTATUS,
             ],
+            vtable_inits [
+                $($vtable_inits)*
+                $method_name: [<shim_ $trait_name _ $method_name>]::<T>,
+            ],
+            vtable_inits_secondary [
+                $($vtable_inits_secondary)*
+                $method_name: [<shim_ $trait_name _ $method_name _secondary>]::<T, P, S, A, INDEX>,
+            ],
             shim_funcs [
                 $($shim_funcs)*
                 #[allow(non_snake_case)]
@@ -950,7 +551,7 @@ macro_rules! __kcom_define_interface {
                 ) -> $crate::NTSTATUS
                 where
                     T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
-                    P: $crate::traits::InterfaceVtable,
+                    P: $crate::vtable::InterfaceVtable,
                     S: $crate::wrapper::SecondaryVtables,
                     S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, [<$trait_name Vtbl>]>,
                     A: $crate::allocator::Allocator + Send + Sync,
@@ -971,12 +572,15 @@ macro_rules! __kcom_define_interface {
         vis ($vis:vis),
         trait_name $trait_name:ident,
         parent_trait ($parent_trait:path),
+        parent_kind ($parent_kind:ident),
         parent_vtable ($($parent_vtable:tt)+),
         iid ($guid:expr),
         trait_docs [$($trait_docs:tt)*],
         trait_safety [$($trait_safety:tt)*],
         trait_methods [$($trait_methods:tt)*],
         vtable_fields [$($vtable_fields:tt)*],
+        vtable_inits [$($vtable_inits:tt)*],
+        vtable_inits_secondary [$($vtable_inits_secondary:tt)*],
         shim_funcs [$($shim_funcs:tt)*],
         ;
         $(#[$method_attr:meta])* fn $method_name:ident(&self $(, $arg_name:ident : $arg_ty:ty)*) -> $ret_ty:ty; $($rest:tt)*
@@ -987,6 +591,7 @@ macro_rules! __kcom_define_interface {
             vis ($vis),
             trait_name $trait_name,
             parent_trait ($parent_trait),
+            parent_kind ($parent_kind),
             parent_vtable ($($parent_vtable)+),
             iid ($guid),
             trait_docs [$($trait_docs)*],
@@ -1001,6 +606,14 @@ macro_rules! __kcom_define_interface {
                     this: *mut core::ffi::c_void
                     $(, $arg_name: $arg_ty)*
                 ) -> $ret_ty,
+            ],
+            vtable_inits [
+                $($vtable_inits)*
+                $method_name: [<shim_ $trait_name _ $method_name>]::<T>,
+            ],
+            vtable_inits_secondary [
+                $($vtable_inits_secondary)*
+                $method_name: [<shim_ $trait_name _ $method_name _secondary>]::<T, P, S, A, INDEX>,
             ],
             shim_funcs [
                 $($shim_funcs)*
@@ -1025,7 +638,7 @@ macro_rules! __kcom_define_interface {
                 ) -> $ret_ty
                 where
                     T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
-                    P: $crate::traits::InterfaceVtable,
+                    P: $crate::vtable::InterfaceVtable,
                     S: $crate::wrapper::SecondaryVtables,
                     S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, [<$trait_name Vtbl>]>,
                     A: $crate::allocator::Allocator + Send + Sync,
@@ -1039,6 +652,232 @@ macro_rules! __kcom_define_interface {
             ;
             $($rest)*
         );
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __kcom_parent_vtbl {
+    (IUnknown, $parent_vtbl:ty, $ty:ty, $vtbl:ty) => {
+        $crate::IUnknownVtbl::new::<$ty, $vtbl>()
+    };
+    (Other, $parent_vtbl:ty, $ty:ty, $vtbl:ty) => {
+        <$parent_vtbl>::new::<$ty>()
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __kcom_parent_vtbl_primary {
+    (
+        IUnknown,
+        $parent_vtbl:ty,
+        $ty:ty,
+        $vtbl:ty,
+        $primary:ty,
+        $secondaries:ty,
+        $alloc:ty
+    ) => {
+        $crate::IUnknownVtbl::new_primary::<$ty, $primary, $secondaries, $alloc>()
+    };
+    (
+        Other,
+        $parent_vtbl:ty,
+        $ty:ty,
+        $vtbl:ty,
+        $primary:ty,
+        $secondaries:ty,
+        $alloc:ty
+    ) => {
+        <$parent_vtbl>::new_primary::<$ty, $primary, $secondaries, $alloc>()
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __kcom_parent_vtbl_secondary {
+    (
+        IUnknown,
+        $parent_vtbl:ty,
+        $ty:ty,
+        $vtbl:ty,
+        $primary:ty,
+        $secondaries:ty,
+        $alloc:ty,
+        $index:expr
+    ) => {{
+        $crate::IUnknownVtbl {
+            QueryInterface: $crate::wrapper::ComObjectN::<$ty, $primary, $secondaries, $alloc>::shim_query_interface_secondary::<$vtbl, { $index }>,
+            AddRef: $crate::wrapper::ComObjectN::<$ty, $primary, $secondaries, $alloc>::shim_add_ref_secondary::<$vtbl, { $index }>,
+            Release: $crate::wrapper::ComObjectN::<$ty, $primary, $secondaries, $alloc>::shim_release_secondary::<$vtbl, { $index }>,
+        }
+    }};
+    (
+        Other,
+        $parent_vtbl:ty,
+        $ty:ty,
+        $vtbl:ty,
+        $primary:ty,
+        $secondaries:ty,
+        $alloc:ty,
+        $index:expr
+    ) => {{
+        <$parent_vtbl>::new_secondary::<$ty, $primary, $secondaries, $alloc, { $index }>()
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __kcom_vtbl_impl_secondary {
+    (
+        IUnknown,
+        $trait_name:ident,
+        $vtbl_name:ty,
+        $parent_vtbl:ty,
+        { $($vtable_inits_secondary:tt)* }
+    ) => {
+        #[allow(dead_code)]
+        pub const fn new_secondary<T, P, S, A, const INDEX: usize>() -> Self
+        where
+            T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
+            T: $crate::ComImpl<$parent_vtbl>,
+            P: $crate::vtable::InterfaceVtable,
+            S: $crate::wrapper::SecondaryVtables,
+            S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, $vtbl_name>,
+            A: $crate::allocator::Allocator + Send + Sync,
+        {
+            Self {
+                parent: $crate::__kcom_parent_vtbl_secondary!(
+                    IUnknown,
+                    $parent_vtbl,
+                    T,
+                    $vtbl_name,
+                    P,
+                    S,
+                    A,
+                    INDEX
+                ),
+                $($vtable_inits_secondary)*
+            }
+        }
+    };
+    (
+        Other,
+        $trait_name:ident,
+        $vtbl_name:ty,
+        $parent_vtbl:ty,
+        { $($vtable_inits_secondary:tt)* }
+    ) => {
+        #[allow(dead_code)]
+        pub const fn new_secondary<T, P, S, A, const INDEX: usize>() -> Self
+        where
+            T: $trait_name + $crate::ComImpl<P> + $crate::wrapper::SecondaryComImpl<S>,
+            T: $crate::ComImpl<$parent_vtbl>,
+            P: $crate::vtable::InterfaceVtable,
+            S: $crate::wrapper::SecondaryVtables,
+            S::Entries: $crate::wrapper::SecondaryEntryAccess<INDEX, $vtbl_name>
+                + $crate::wrapper::SecondaryEntryAccess<INDEX, $parent_vtbl>,
+            A: $crate::allocator::Allocator + Send + Sync,
+        {
+            Self {
+                parent: $crate::__kcom_parent_vtbl_secondary!(
+                    Other,
+                    $parent_vtbl,
+                    T,
+                    $vtbl_name,
+                    P,
+                    S,
+                    A,
+                    INDEX
+                ),
+                $($vtable_inits_secondary)*
+            }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __kcom_vtbl_impl_primary {
+    (
+        IUnknown,
+        $trait_name:ident,
+        $vtbl_name:ty,
+        $parent_vtbl:ty,
+        { $($vtable_inits:tt)* }
+    ) => {
+        #[allow(dead_code)]
+        pub const fn new_primary<T, P, S, A>() -> Self
+        where
+            T: $trait_name
+                + $crate::ComImpl<$vtbl_name>
+                + $crate::ComImpl<$parent_vtbl>
+                + $crate::ComImpl<P>
+                + $crate::wrapper::SecondaryComImpl<S>,
+            P: $crate::vtable::InterfaceVtable,
+            S: $crate::wrapper::SecondaryVtables,
+            S::Entries: $crate::wrapper::SecondaryList,
+            A: $crate::allocator::Allocator + Send + Sync,
+        {
+            Self {
+                parent: $crate::__kcom_parent_vtbl_primary!(
+                    IUnknown,
+                    $parent_vtbl,
+                    T,
+                    $vtbl_name,
+                    P,
+                    S,
+                    A
+                ),
+                $($vtable_inits)*
+            }
+        }
+    };
+    (
+        Other,
+        $trait_name:ident,
+        $vtbl_name:ty,
+        $parent_vtbl:ty,
+        { $($vtable_inits:tt)* }
+    ) => {
+        #[allow(dead_code)]
+        pub const fn new_primary<T, P, S, A>() -> Self
+        where
+            T: $trait_name
+                + $crate::ComImpl<$vtbl_name>
+                + $crate::ComImpl<$parent_vtbl>
+                + $crate::ComImpl<P>
+                + $crate::wrapper::SecondaryComImpl<S>,
+            P: $crate::vtable::InterfaceVtable,
+            S: $crate::wrapper::SecondaryVtables,
+            S::Entries: $crate::wrapper::SecondaryList,
+            A: $crate::allocator::Allocator + Send + Sync,
+        {
+            Self {
+                parent: $crate::__kcom_parent_vtbl_primary!(
+                    Other,
+                    $parent_vtbl,
+                    T,
+                    $vtbl_name,
+                    P,
+                    S,
+                    A
+                ),
+                $($vtable_inits)*
+            }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __kcom_secondary_entry_bounds {
+    (IUnknown, $vtbl:ty, $parent_vtbl:ty, $index:expr) => {
+        $crate::wrapper::SecondaryEntryAccess<$index, $vtbl>
+    };
+    (Other, $vtbl:ty, $parent_vtbl:ty, $index:expr) => {
+        $crate::wrapper::SecondaryEntryAccess<$index, $vtbl>
+            + $crate::wrapper::SecondaryEntryAccess<$index, $parent_vtbl>
     };
 }
 
@@ -1091,33 +930,5 @@ macro_rules! __kcom_map_return {
     };
     ($ret_ty:ty, $expr:expr) => {
         $expr
-    };
-}
-
-#[macro_export]
-macro_rules! pin_init {
-    ($value:expr) => {
-        $crate::allocator::PinInitOnce::new(|ptr| {
-            // SAFETY: caller guarantees `ptr` is valid for writes.
-            unsafe { core::ptr::write(ptr, $value) };
-            ::core::result::Result::<(), _>::Ok(())
-        })
-    };
-    (|$ptr:ident| $body:block) => {
-        $crate::allocator::PinInitOnce::new(|$ptr| $body)
-    };
-}
-
-#[macro_export]
-macro_rules! pin_init_async {
-    ($body:expr) => {
-        $crate::pin_init!(async move { $body })
-    };
-}
-
-#[macro_export]
-macro_rules! init_box {
-    ($alloc:expr, $init:expr) => {
-        $crate::allocator::InitBox::new($alloc, $init)
     };
 }

@@ -56,7 +56,6 @@ impl_com_interface! {
     impl Miniport: IMiniportWaveRT {
         parent = IMiniportVtbl,
         methods = [new_stream],
-        qi = [IMiniportWaveRT, IMiniport => this],
     }
 }
 

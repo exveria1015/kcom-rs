@@ -12,7 +12,8 @@ use crate::iunknown::{
     STATUS_SUCCESS,
 };
 use crate::smart_ptr::{ComInterface, ComRc};
-use crate::traits::{ComImpl, ComInterfaceInfo, InterfaceVtable};
+use crate::traits::ComImpl;
+use crate::vtable::{ComInterfaceInfo, InterfaceVtable};
 
 #[inline]
 unsafe fn delegating_add_ref(

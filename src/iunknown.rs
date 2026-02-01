@@ -3,7 +3,9 @@
 
 use core::ffi::c_void;
 
-use crate::traits::InterfaceVtable;
+use crate::traits::ComImpl;
+use crate::vtable::InterfaceVtable;
+use crate::wrapper::{ComObject, ComObjectN, SecondaryComImpl, SecondaryList, SecondaryVtables};
 
 pub type NTSTATUS = i32;
 
@@ -147,3 +149,34 @@ pub struct IUnknownVtbl {
 }
 
 unsafe impl InterfaceVtable for IUnknownVtbl {}
+
+impl IUnknownVtbl {
+    /// Compile-time construction of the IUnknown vtable for a given COM type.
+    pub const fn new<T, I>() -> Self
+    where
+        T: ComImpl<I>,
+        I: InterfaceVtable,
+    {
+        Self {
+            QueryInterface: ComObject::<T, I>::shim_query_interface,
+            AddRef: ComObject::<T, I>::shim_add_ref,
+            Release: ComObject::<T, I>::shim_release,
+        }
+    }
+
+    /// Compile-time construction of the IUnknown vtable for a ComObjectN primary interface.
+    pub const fn new_primary<T, P, S, A>() -> Self
+    where
+        T: ComImpl<P> + SecondaryComImpl<S>,
+        P: InterfaceVtable,
+        S: SecondaryVtables,
+        S::Entries: SecondaryList,
+        A: crate::allocator::Allocator + Send + Sync,
+    {
+        Self {
+            QueryInterface: ComObjectN::<T, P, S, A>::shim_query_interface,
+            AddRef: ComObjectN::<T, P, S, A>::shim_add_ref,
+            Release: ComObjectN::<T, P, S, A>::shim_release,
+        }
+    }
+}

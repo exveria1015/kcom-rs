@@ -115,7 +115,7 @@ impl<T: ComInterface> ComRc<T> {
     /// Queries for another COM interface and returns a smart pointer on success.
     pub fn query_interface<U>(&self) -> StatusResult<ComRc<U>>
     where
-        U: ComInterface + crate::traits::ComInterfaceInfo,
+        U: ComInterface + crate::vtable::ComInterfaceInfo,
     {
         let mut out = core::ptr::null_mut();
         let vtbl = unsafe { *(self.ptr.as_ptr() as *mut *mut IUnknownVtbl) };

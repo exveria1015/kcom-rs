@@ -13,8 +13,10 @@ pub mod iunknown;
 pub mod allocator;
 pub mod executor;
 pub mod macros;
+pub use macros::*;
 pub mod smart_ptr;
 pub mod task;
+pub mod vtable;
 #[cfg(feature = "kernel-unicode")]
 pub mod unicode;
 #[cfg(any(feature = "async-com-kernel", feature = "kernel-unicode"))]
@@ -31,7 +33,8 @@ pub use paste;
 pub use async_trait::async_trait as async_impl;
 #[cfg(feature = "kernel-unicode")]
 pub use utf16_lit;
-pub use traits::{ComImpl, ComInterfaceInfo, InterfaceVtable, IUnknown, IUnknownInterface};
+pub use traits::{ComImpl, IUnknown, IUnknownInterface};
+pub use vtable::{ComInterfaceInfo, InterfaceVtable, match_interface_ptr};
 pub use smart_ptr::{ComInterface, ComRc, ThreadSafeComInterface};
 pub use allocator::{
     Allocator, GlobalAllocator, InitBox, InitBoxTrait, KBox, KBoxError, PinInit, PinInitOnce,
@@ -74,7 +77,7 @@ macro_rules! impl_com_object {
             ) -> Result<$crate::smart_ptr::ComRc<R>, $crate::NTSTATUS>
             where
                 R: $crate::smart_ptr::ComInterface
-                    + $crate::traits::ComInterfaceInfo<Vtable = $vtable>,
+                    + $crate::vtable::ComInterfaceInfo<Vtable = $vtable>,
             {
                 $crate::wrapper::ComObject::<Self, $vtable>::new_rc(inner)
             }
@@ -98,7 +101,7 @@ macro_rules! impl_com_object {
             where
                 A: $crate::allocator::Allocator + Send + Sync,
                 R: $crate::smart_ptr::ComInterface
-                    + $crate::traits::ComInterfaceInfo<Vtable = $vtable>,
+                    + $crate::vtable::ComInterfaceInfo<Vtable = $vtable>,
             {
                 $crate::wrapper::ComObject::<Self, $vtable, A>::new_rc_in(inner, alloc)
             }
@@ -112,7 +115,7 @@ macro_rules! impl_com_object {
             pub fn try_new_com_rc<R>(inner: Self) -> Option<$crate::smart_ptr::ComRc<R>>
             where
                 R: $crate::smart_ptr::ComInterface
-                    + $crate::traits::ComInterfaceInfo<Vtable = $vtable>,
+                    + $crate::vtable::ComInterfaceInfo<Vtable = $vtable>,
             {
                 $crate::wrapper::ComObject::<Self, $vtable>::try_new_rc(inner)
             }
@@ -133,7 +136,7 @@ macro_rules! impl_com_object {
             where
                 A: $crate::allocator::Allocator + Send + Sync,
                 R: $crate::smart_ptr::ComInterface
-                    + $crate::traits::ComInterfaceInfo<Vtable = $vtable>,
+                    + $crate::vtable::ComInterfaceInfo<Vtable = $vtable>,
             {
                 $crate::wrapper::ComObject::<Self, $vtable, A>::try_new_rc_in(inner, alloc)
             }
