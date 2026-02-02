@@ -342,6 +342,17 @@ fn assert_overaligned_header(header: &WdkAllocHeader, layout: Layout) {
     debug_assert_eq!(header.align, layout.align());
 }
 
+#[cfg(all(feature = "wdk-alloc-align", debug_assertions))]
+#[doc(hidden)]
+pub fn debug_assert_overaligned_layout(alloc_align: usize, layout: Layout) {
+    let header = WdkAllocHeader {
+        magic: WDK_ALLOC_MAGIC,
+        base: 0,
+        align: alloc_align,
+    };
+    assert_overaligned_header(&header, layout);
+}
+
 #[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
 #[inline]
 fn needs_overaligned(layout: Layout) -> bool {
@@ -573,36 +584,6 @@ impl Allocator for WdkAllocator {
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         GlobalAllocator.dealloc(ptr, layout)
-    }
-}
-
-#[cfg(all(test, feature = "wdk-alloc-align", debug_assertions))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wdk_alloc_header_accepts_matching_align() {
-        let header = WdkAllocHeader {
-            magic: WDK_ALLOC_MAGIC,
-            base: 0,
-            align: 64,
-        };
-        let layout = Layout::from_size_align(8, 64).expect("layout");
-        assert_overaligned_header(&header, layout);
-    }
-
-    #[test]
-    fn wdk_alloc_header_rejects_mismatched_align() {
-        let header = WdkAllocHeader {
-            magic: WDK_ALLOC_MAGIC,
-            base: 0,
-            align: 64,
-        };
-        let layout = Layout::from_size_align(8, 8).expect("layout");
-        let result = std::panic::catch_unwind(|| {
-            assert_overaligned_header(&header, layout);
-        });
-        assert!(result.is_err());
     }
 }
 

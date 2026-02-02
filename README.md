@@ -111,6 +111,12 @@ By default, `WdkAllocator` enforces the kernel pool alignment (16 bytes on x64).
 over-aligned allocations (e.g. `#[repr(align(32))]`), enable the `wdk-alloc-align` feature.
 This adds padding and a small header only for over-aligned layouts; the default path is unchanged.
 
+Allocator note:
+
+- `ComObject`/`KBox` store the allocator inside the allocation and move it out with `ptr::read`
+  before freeing. Allocators must be safe to move by bitcopy and must not borrow from the
+  allocation being freed (prefer small handle or `Copy`-like types).
+
 ## Usage (sync interface)
 
 ```rust
