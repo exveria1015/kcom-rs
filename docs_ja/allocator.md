@@ -16,6 +16,9 @@ pub trait Allocator {
 
 - `GlobalAlloc` に近い API だが、オブジェクトとして渡せる
 - `alloc_zeroed` は `alloc` + `write_bytes` がデフォルト
+- `ComObject`/`KBox` はアロケータを割り当て領域内に保持し、解放前に
+  `ptr::read` で取り出す。アロケータはビットコピーで安全に移動でき、
+  解放対象のメモリを参照しない軽量ハンドル型（`Copy` 相当）が前提。
 
 ## GlobalAllocator
 

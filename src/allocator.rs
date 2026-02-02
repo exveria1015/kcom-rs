@@ -318,10 +318,10 @@ pub struct WdkAllocator {
 #[cfg(all(feature = "driver", not(miri)))]
 const WDK_ALLOC_ALIGNMENT: usize = if cfg!(target_pointer_width = "64") { 16 } else { 8 };
 
-#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
 const WDK_ALLOC_MAGIC: usize = 0x4b43_4f4d;
 
-#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
 #[repr(C)]
 struct WdkAllocHeader {
     magic: usize,
@@ -329,11 +329,18 @@ struct WdkAllocHeader {
     align: usize,
 }
 
-#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
 const WDK_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<WdkAllocHeader>();
 
-#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", not(debug_assertions)))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", not(debug_assertions)))]
 const WDK_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<usize>();
+
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
+#[inline]
+fn assert_overaligned_header(header: &WdkAllocHeader, layout: Layout) {
+    debug_assert_eq!(header.magic, WDK_ALLOC_MAGIC);
+    debug_assert_eq!(header.align, layout.align());
+}
 
 #[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
 #[inline]
@@ -415,8 +422,7 @@ unsafe fn alloc_overaligned(
 unsafe fn dealloc_overaligned(ptr: *mut u8, tag: u32, layout: Layout) {
     let header_ptr = (ptr as usize - WDK_ALLOC_HEADER_SIZE) as *const WdkAllocHeader;
     let header = unsafe { &*header_ptr };
-    debug_assert_eq!(header.magic, WDK_ALLOC_MAGIC);
-    debug_assert_eq!(header.align, layout.align());
+    assert_overaligned_header(header, layout);
     let base = header.base as *mut u8;
     unsafe { ExFreePoolWithTag(base as _, tag) };
 }
@@ -567,6 +573,36 @@ impl Allocator for WdkAllocator {
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         GlobalAllocator.dealloc(ptr, layout)
+    }
+}
+
+#[cfg(all(test, feature = "wdk-alloc-align", debug_assertions))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wdk_alloc_header_accepts_matching_align() {
+        let header = WdkAllocHeader {
+            magic: WDK_ALLOC_MAGIC,
+            base: 0,
+            align: 64,
+        };
+        let layout = Layout::from_size_align(8, 64).expect("layout");
+        assert_overaligned_header(&header, layout);
+    }
+
+    #[test]
+    fn wdk_alloc_header_rejects_mismatched_align() {
+        let header = WdkAllocHeader {
+            magic: WDK_ALLOC_MAGIC,
+            base: 0,
+            align: 64,
+        };
+        let layout = Layout::from_size_align(8, 8).expect("layout");
+        let result = std::panic::catch_unwind(|| {
+            assert_overaligned_header(&header, layout);
+        });
+        assert!(result.is_err());
     }
 }
 
