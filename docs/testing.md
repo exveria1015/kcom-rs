@@ -20,8 +20,6 @@ This project uses a mix of unit tests, integration tests, and Miri runs.
 - wdk-alloc-align (driver + wdk-alloc-align + driver-test-stub)
 - driver-miri (driver + async-com-kernel + driver-test-stub)
 
-Nightly and Miri builds auto-enable strict provenance checks via build cfg.
-
 ## Driver stubs
 
 The `driver-test-stub` feature provides a minimal `DriverEntry` so that driver

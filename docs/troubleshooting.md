@@ -24,17 +24,6 @@ If builds fail with `os error 5` (access denied):
 - Temporarily disable antivirus real-time scanning for the repo
 - Retry the build
 
-## Unexpected cfg warnings
-
-`kcom` uses a build-time cfg (`kcom_strict_provenance`) in nightly/Miri.
-The build script advertises it via `rustc-check-cfg`; if warnings persist,
-ensure `build.rs` is executed and not blocked.
-
-## Miri: integer-to-pointer cast warnings
-
-These warnings indicate provenance-sensitive casts. Use the strict provenance
-path (nightly/Miri auto-enabled, or `strict-provenance` feature) for validation.
-
 ## Kernel unicode tests failing
 
 The `kernel-unicode` feature expects kernel UNICODE_STRING types. In host/Miri

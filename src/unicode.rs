@@ -195,26 +195,17 @@ impl<const N: usize> LocalUnicodeString<N> {
         self.len == 0
     }
 
-    /// Returns a UNICODE_STRING value that borrows the internal buffer.
-    ///
-    /// The returned value must not be stored beyond the lifetime of `self`.
-    /// Prefer `as_unicode_ref()` when you need a lifetime-tied view.
-    #[inline]
-    pub fn as_unicode(&self) -> UNICODE_STRING {
-        let max_units = (u16::MAX as usize) / 2;
-        let cap_units = core::cmp::min(N, max_units);
-        UNICODE_STRING {
-            Length: (self.len * 2) as u16,
-            MaximumLength: (cap_units * 2) as u16,
-            Buffer: self.buffer.as_ptr() as *mut u16,
-        }
-    }
-
     /// Returns a UNICODE_STRING view tied to this value's lifetime.
     #[inline]
     pub fn as_unicode_ref(&self) -> UnicodeStringRef<'_> {
+        let max_units = (u16::MAX as usize) / 2;
+        let cap_units = core::cmp::min(N, max_units);
         UnicodeStringRef {
-            inner: self.as_unicode(),
+            inner: UNICODE_STRING {
+                Length: (self.len * 2) as u16,
+                MaximumLength: (cap_units * 2) as u16,
+                Buffer: self.buffer.as_ptr() as *mut u16,
+            },
             _marker: core::marker::PhantomData,
         }
     }
@@ -332,9 +323,9 @@ mod tests {
     #[test]
     fn local_unicode_string_from_str() {
         let local = LocalUnicodeString::<8>::from_str("Test").expect("local string");
-        let unicode = local.as_unicode();
-        assert_eq!(unicode.Length, 8);
-        assert_eq!(unicode.MaximumLength, 16);
+        let unicode = local.as_unicode_ref();
+        assert_eq!(unicode.as_ref().Length, 8);
+        assert_eq!(unicode.as_ref().MaximumLength, 16);
         let slice = local.as_utf16();
         assert_eq!(slice, "Test".encode_utf16().collect::<Vec<u16>>());
     }

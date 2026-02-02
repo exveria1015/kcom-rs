@@ -30,7 +30,13 @@
 
 詳細は `README.md` を参照してください。各ドキュメントでも必要に応じて
 `driver` / `async-com` / `async-com-kernel` / `kernel-unicode` /
-`refcount-hardening` / `wdk-alloc-align` / `strict-provenance` を明記します。
+`refcount-hardening` / `wdk-alloc-align` を明記します。
+
+## Allocator の補足
+
+- `ComObject`/`KBox` はアロケータを割り当て領域内に保持し、解放前に
+  `ptr::read` で取り出します。アロケータはビットコピーで安全に移動でき、
+  解放対象のメモリを参照しない軽量ハンドル型（`Copy` 相当）が前提です。
 
 ## 表記ルール
 

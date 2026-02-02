@@ -20,8 +20,6 @@
 - wdk-alloc-align（`driver` + `wdk-alloc-align` + `driver-test-stub`）
 - driver-miri（`driver` + `async-com-kernel` + `driver-test-stub`）
 
-nightly/Miri では strict provenance が自動的に有効化されます。
-
 ## driver-test-stub スタブ
 
 `driver-test-stub` はユーザーモードで `driver` feature をリンクするための

@@ -88,9 +88,11 @@ pub use executor::spawn_task;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub use executor::{
     set_task_alloc_tag,
+    set_task_budget,
     spawn_dpc_task,
     spawn_dpc_task_cancellable_tracked,
     spawn_dpc_task_tracked,
+    TaskBudget,
     TaskTracker,
 };
 pub use task::{try_finally, Cancellable};

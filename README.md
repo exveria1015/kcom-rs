@@ -69,7 +69,8 @@ use core::fmt::Write;
 
 let mut s = LocalUnicodeString::<64>::new();
 write!(&mut s, "Err code: {:x}", 0x2a).unwrap();
-let unicode = s.as_unicode();
+let unicode = s.as_unicode_ref();
+let unicode_ref = unicode.as_ref();
 ```
 
 ```rust

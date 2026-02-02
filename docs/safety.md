@@ -63,17 +63,17 @@ builds, panics should be treated as fatal:
 ## Refcount hardening and resurrection
 
 `refcount-hardening` adds overflow/underflow guards.
+`leaky-hardening` keeps the system alive on overflow/underflow by saturating the
+refcount instead of bug checking (this can leak the object).
 
 During `Release`, `kcom` checks for refcount resurrection (a Drop that calls
 AddRef). If detected, the code triggers a fail-fast path (bug check in driver
-builds). This prevents use-after-free when the object is resurrected during
-destruction.
+builds), even when `leaky-hardening` is enabled. This prevents use-after-free
+when the object is resurrected during destruction.
 
-## Provenance trade-offs
+## Provenance policy
 
-The async guard path stores pointers as `usize` by default to minimize overhead
-in kernel builds. This relies on exposed-provenance semantics and is a known
-trade-off. Nightly and Miri builds auto-enable strict provenance via build
-configuration to reduce this risk. The `strict-provenance` feature provides an
-explicit opt-in for other builds.
+Async guard pointers are stored using `NonNull<c_void>` with strict provenance
+semantics by default. This avoids integer-based casts while keeping the ABI
+layout identical to a raw pointer.
 

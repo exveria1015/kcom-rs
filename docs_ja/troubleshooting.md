@@ -24,20 +24,7 @@ cargo +nightly miri test -p kcom-tests --features async-com
 - ウイルス対策のリアルタイムスキャンを一時停止
 - 再ビルド
 
-## unexpected cfg 警告
-
-`kcom_strict_provenance` のような build cfg に対する警告です。
-`build.rs` が動いているか確認し、`rustc-check-cfg` が出力されることを
-確認してください。
-
-## Miri の integer-to-pointer cast 警告
-
-provenance に関する警告です。nightly/Miri では strict 側が自動有効化されます。
-明示的に有効化する場合は `strict-provenance` feature を使います。
-
 ## kernel-unicode の失敗
 
 `kernel-unicode` はカーネルの `UNICODE_STRING` に依存します。
-ホスト/Miri ではスタブ型を使用しているため、想定した feature 構成か
-確認してください。
-
+ホスト/Miri ではスタブ型を使用していて、想定した feature 構成か確認してください。

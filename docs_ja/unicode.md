@@ -36,7 +36,6 @@ let unicode = s.as_unicode_ref();
 - 容量は UTF-16 ユニット数
 - `try_push_str` は終端の 1 ユニットを確保する
 - `as_unicode_ref()` はライフタイムを結び付けた安全な参照
-- `as_unicode()` は値で返すため、`self` の寿命を超えて保持しない
 
 ## kstr!
 

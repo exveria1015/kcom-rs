@@ -30,7 +30,7 @@ kernel-unicode = ["utf16_lit"]
 driver = ["wdk-sys"]
 driver-test-stub = ["driver"]
 refcount-hardening = []
-strict-provenance = []
+leaky-hardening = ["refcount-hardening"]
 wdk-alloc-align = ["driver"]
 
 [lints.rust]

@@ -32,7 +32,7 @@ use core::mem::ManuallyDrop;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use core::ptr::{NonNull, null_mut};
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
-use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 use crate::ntddk::{
@@ -68,8 +68,8 @@ use crate::refcount;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::ntddk::{
     KeAcquireSpinLockRaiseToDpc, KeCancelTimer, KeInitializeDpc, KeInitializeSpinLock,
-    KeInitializeTimer, KeInsertQueueDpc, KeReleaseSpinLock, KeRemoveQueueDpc, KeSetTimer, KDPC,
-    KIRQL, KSPIN_LOCK, PKDPC, KTIMER, LARGE_INTEGER, PKTIMER,
+    KeInitializeTimer, KeInsertQueueDpc, KeQueryPerformanceCounter, KeReleaseSpinLock,
+    KeRemoveQueueDpc, KeSetTimer, KDPC, KIRQL, KSPIN_LOCK, LARGE_INTEGER, PKDPC, KTIMER, PKTIMER,
 };
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
@@ -102,7 +102,48 @@ struct TaskHeader {
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
-const DEFAULT_TASK_BUDGET: u32 = 64;
+const DEFAULT_TASK_BUDGET_POLLS: u32 = 64;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const DEFAULT_TASK_BUDGET_TIME_US: u64 = 200;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const TASK_BUDGET_MODE_POLLS: u32 = 0;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const TASK_BUDGET_MODE_TIME_US: u32 = 1;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const TASK_BUDGET_TIME_CHECK_INTERVAL: u32 = 8;
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_MODE: AtomicU32 = AtomicU32::new(TASK_BUDGET_MODE_POLLS);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_POLLS: AtomicU32 = AtomicU32::new(DEFAULT_TASK_BUDGET_POLLS);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_TIME_US: AtomicU64 = AtomicU64::new(DEFAULT_TASK_BUDGET_TIME_US);
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+#[derive(Copy, Clone, Debug)]
+pub enum TaskBudget {
+    Polls(u32),
+    TimeUs(u64),
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+/// Configure the DPC executor budget.
+///
+/// - `Polls(n)` matches the original behavior (poll at most n times per DPC run).
+/// - `TimeUs(us)` limits execution time using `KeQueryPerformanceCounter`.
+#[inline]
+pub fn set_task_budget(budget: TaskBudget) {
+    match budget {
+        TaskBudget::Polls(polls) => {
+            TASK_BUDGET_POLLS.store(polls, Ordering::Release);
+            TASK_BUDGET_MODE.store(TASK_BUDGET_MODE_POLLS, Ordering::Release);
+        }
+        TaskBudget::TimeUs(us) => {
+            TASK_BUDGET_TIME_US.store(us, Ordering::Release);
+            TASK_BUDGET_MODE.store(TASK_BUDGET_MODE_TIME_US, Ordering::Release);
+        }
+    }
+}
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 static DEFAULT_TASK_TAG: AtomicU32 = AtomicU32::new(u32::from_ne_bytes(*b"kcom"));
@@ -353,7 +394,19 @@ impl TaskHeader {
         if let Some(cpu_index) = cpu_index {
             unsafe { set_current_task(cpu_index, ptr) };
         }
-        let mut budget = DEFAULT_TASK_BUDGET;
+        let budget_mode = TASK_BUDGET_MODE.load(Ordering::Acquire);
+        let mut poll_budget = TASK_BUDGET_POLLS.load(Ordering::Acquire);
+        let (time_budget_ticks, time_start_ticks) = if budget_mode == TASK_BUDGET_MODE_TIME_US {
+            let mut freq = LARGE_INTEGER { QuadPart: 0 };
+            let start = unsafe { KeQueryPerformanceCounter(&mut freq) };
+            let freq = if freq.QuadPart <= 0 { 1 } else { freq.QuadPart as u64 };
+            let budget_us = TASK_BUDGET_TIME_US.load(Ordering::Acquire);
+            let ticks = budget_us.saturating_mul(freq) / 1_000_000;
+            (ticks, start.QuadPart as u64)
+        } else {
+            (0, 0)
+        };
+        let mut time_check_counter: u32 = 0;
 
         loop {
             let poll = unsafe { ((*ptr.as_ptr()).vtable.poll)(ptr.as_ptr(), &mut cx) };
@@ -378,7 +431,26 @@ impl TaskHeader {
                         break;
                     }
 
-                    if budget == 0 {
+                    let mut budget_exhausted = false;
+                    if budget_mode == TASK_BUDGET_MODE_POLLS {
+                        if poll_budget == 0 {
+                            budget_exhausted = true;
+                        } else {
+                            poll_budget -= 1;
+                        }
+                    } else {
+                        time_check_counter = time_check_counter.wrapping_add(1);
+                        if time_check_counter % TASK_BUDGET_TIME_CHECK_INTERVAL == 0 {
+                            let now = unsafe { KeQueryPerformanceCounter(null_mut()) };
+                            let elapsed = (now.QuadPart as u64)
+                                .wrapping_sub(time_start_ticks);
+                            if elapsed >= time_budget_ticks {
+                                budget_exhausted = true;
+                            }
+                        }
+                    }
+
+                    if budget_exhausted {
                         unsafe { Self::queue_dpc(ptr) };
                         break;
                     }
@@ -386,7 +458,6 @@ impl TaskHeader {
                     unsafe { &*ptr.as_ptr() }
                         .scheduled
                         .store(0, Ordering::Release);
-                    budget -= 1;
                 }
             }
         }

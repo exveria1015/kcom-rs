@@ -21,8 +21,8 @@ mod unicode_edge_spec {
         assert_eq!(local.len(), 0);
         assert!(local.is_empty());
 
-        let unicode = local.as_unicode();
-        assert_eq!(unicode.Length, 0);
+        let unicode = local.as_unicode_ref();
+        assert_eq!(unicode.as_ref().Length, 0);
     }
 
     #[test]

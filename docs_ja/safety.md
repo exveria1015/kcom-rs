@@ -62,15 +62,16 @@ Work-item は `PASSIVE_LEVEL` で実行されます。
 ## Refcount ハードニング / Resurrection
 
 `refcount-hardening` により overflow/underflow を検出します。
+`leaky-hardening` は overflow/underflow 時に bug check せず、参照カウントを飽和させて
+オブジェクトをリークさせます（OS を維持するための選択肢です）。
 
 `Release` 中に `Drop` が `AddRef` を呼び参照カウントが復活した場合、
 `kcom` はフェイルファストします（ドライバでは bug check）。
+この動作は `leaky-hardening` 有効時も変わりません。
 
-## Provenance トレードオフ
+## Provenance ポリシー
 
-Async ガードはデフォルトで `usize` 経由のポインタ保存を使います。
-これは exposed-provenance に依存する既知のトレードオフです。
-
-nightly/Miri では build cfg により strict 側を自動有効化します。
-`strict-provenance` feature による明示有効化も可能です。
+Async ガードのポインタは `NonNull<c_void>` で保持し、strict provenance を
+デフォルトで採用します。整数キャストを避けつつ、生ポインタと同じ ABI
+レイアウトを維持します。
 

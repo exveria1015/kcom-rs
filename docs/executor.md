@@ -32,6 +32,14 @@ Cancellation:
   acknowledged.
 - `try_finally` combines a main future with async cleanup.
 
+Budgeting:
+
+- The DPC executor enforces a per-run budget.
+- Default mode is poll-count based (64 polls per run).
+- Use `set_task_budget(TaskBudget::Polls(n))` or
+  `set_task_budget(TaskBudget::TimeUs(us))` to configure poll-based or
+  time-based limits.
+
 CPU indexing:
 
 - DPC cancellation tracking uses a per-CPU table.

@@ -30,5 +30,5 @@ boundaries, and kernel‑specific constraints.
 
 See `README.md` for details. Most docs below annotate feature requirements
 inline, e.g. `driver`, `async-com`, `async-com-kernel`, `kernel-unicode`,
-`refcount-hardening`, `wdk-alloc-align`, and `strict-provenance`.
+`refcount-hardening`, and `wdk-alloc-align`.
 

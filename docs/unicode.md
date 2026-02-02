@@ -35,8 +35,6 @@ Notes:
 - Capacity is in UTF-16 units, not bytes.
 - `try_push_str` ensures space for a null terminator.
 - `as_unicode_ref()` returns a lifetime-tied view.
-- `as_unicode()` returns a `UNICODE_STRING` by value and must not be stored
-  beyond the lifetime of the `LocalUnicodeString` (footgun if misused).
 
 ## kstr! (static literals)
 
