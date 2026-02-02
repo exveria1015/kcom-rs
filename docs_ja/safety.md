@@ -59,6 +59,9 @@ Work-item は `PASSIVE_LEVEL` で実行されます。
 - `panic = "abort"`
 - 必要に応じて `KeBugCheckEx` へ接続
 
+すべての COM shim は panic ガードを使い、Unwind が境界を越える場合は
+フェイルファストします。
+
 ## Refcount ハードニング / Resurrection
 
 `refcount-hardening` により overflow/underflow を検出します。

@@ -62,6 +62,66 @@ fn resurrection_violation() -> ! {
     }
 }
 
+#[cold]
+#[inline(never)]
+fn fail_fast() -> ! {
+    #[cfg(all(
+        feature = "driver",
+        any(feature = "async-com-kernel", feature = "kernel-unicode"),
+        not(miri)
+    ))]
+    unsafe {
+        crate::ntddk::KeBugCheckEx(0xDEAD_DEAD, 0, 0, 0, 0);
+    }
+
+    #[cfg(all(not(feature = "driver"), test))]
+    {
+        std::process::abort();
+    }
+
+    #[cfg(all(not(feature = "driver"), not(test)))]
+    {
+        panic!("kcom: panic crossed FFI boundary");
+    }
+
+    #[cfg(all(
+        feature = "driver",
+        not(any(feature = "async-com-kernel", feature = "kernel-unicode"))
+    ))]
+    {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    #[cfg(all(
+        feature = "driver",
+        any(feature = "async-com-kernel", feature = "kernel-unicode"),
+        miri
+    ))]
+    {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+#[must_use]
+pub(crate) struct PanicGuard;
+
+impl PanicGuard {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Drop for PanicGuard {
+    fn drop(&mut self) {
+        fail_fast();
+    }
+}
+
 #[inline]
 unsafe fn delegating_add_ref(
     outer_unknown: Option<*mut c_void>,
@@ -418,16 +478,20 @@ where
     /// # Safety
     /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_add_ref(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_ptr(this) };
-        delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count)
+        let result = delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count);
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
     /// # Safety
     /// `this` must be a valid COM pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_release(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { &*(this as *const Self) };
-        delegating_release(wrapper.outer_unknown, &wrapper.ref_count, || {
+        let result = delegating_release(wrapper.outer_unknown, &wrapper.ref_count, || {
             let ptr = this as *mut Self;
             let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
@@ -438,7 +502,9 @@ where
             }
             alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
-        })
+        });
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
@@ -450,15 +516,19 @@ where
         riid: *const GUID,
         ppv: *mut *mut c_void,
     ) -> NTSTATUS {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_ptr(this) };
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
                 let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
-                return unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
+                let result = unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
+                core::mem::forget(guard);
+                return result;
             }
         }
 
         if ppv.is_null() || riid.is_null() {
+            core::mem::forget(guard);
             return STATUS_NOINTERFACE;
         }
 
@@ -467,6 +537,7 @@ where
         if *riid == IID_IUNKNOWN {
             unsafe { Self::shim_add_ref(this) };
             unsafe { *ppv = this };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
@@ -474,10 +545,12 @@ where
             let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
             unsafe { ((*vtbl).AddRef)(ptr) };
             unsafe { *ppv = ptr };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
         unsafe { *ppv = core::ptr::null_mut() };
+        core::mem::forget(guard);
         STATUS_NOINTERFACE
     }
 
@@ -491,8 +564,11 @@ where
         I: InterfaceVtable,
         S::Entries: SecondaryEntryAccess<INDEX, I>,
     {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_secondary_ptr::<I, INDEX>(this) };
-        delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count)
+        let result = delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count);
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
@@ -505,9 +581,12 @@ where
         I: InterfaceVtable,
         S::Entries: SecondaryEntryAccess<INDEX, I>,
     {
+        let guard = PanicGuard::new();
         let primary =
             unsafe { <S::Entries as SecondaryEntryAccess<INDEX, I>>::parent_from_ptr(this) };
-        unsafe { Self::shim_release(primary) }
+        let result = unsafe { Self::shim_release(primary) };
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
@@ -522,17 +601,21 @@ where
         I: InterfaceVtable,
         S::Entries: SecondaryEntryAccess<INDEX, I>,
     {
+        let guard = PanicGuard::new();
         let primary =
             unsafe { <S::Entries as SecondaryEntryAccess<INDEX, I>>::parent_from_ptr(this) };
         let wrapper = unsafe { Self::from_ptr(primary) };
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
                 let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
-                return unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
+                let result = unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
+                core::mem::forget(guard);
+                return result;
             }
         }
 
         if ppv.is_null() || riid.is_null() {
+            core::mem::forget(guard);
             return STATUS_NOINTERFACE;
         }
 
@@ -541,6 +624,7 @@ where
         if *riid == IID_IUNKNOWN {
             unsafe { Self::shim_add_ref(primary) };
             unsafe { *ppv = primary };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
@@ -548,10 +632,12 @@ where
             let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
             unsafe { ((*vtbl).AddRef)(ptr) };
             unsafe { *ppv = ptr };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
         unsafe { *ppv = core::ptr::null_mut() };
+        core::mem::forget(guard);
         STATUS_NOINTERFACE
     }
 
@@ -559,14 +645,18 @@ where
     /// # Safety
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_add_ref(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_non_delegating(this) };
-        refcount::add(&wrapper.ref_count)
+        let result = refcount::add(&wrapper.ref_count);
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
     /// # Safety
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let ptr = unsafe { Self::non_delegating_parent_ptr(this) };
         let count = refcount::sub(unsafe { &(*ptr).ref_count });
 
@@ -585,6 +675,7 @@ where
             drop(alloc);
         }
 
+        core::mem::forget(guard);
         count
     }
 
@@ -596,8 +687,10 @@ where
         riid: *const GUID,
         ppv: *mut *mut c_void,
     ) -> NTSTATUS {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_non_delegating(this) };
         if ppv.is_null() || riid.is_null() {
+            core::mem::forget(guard);
             return STATUS_NOINTERFACE;
         }
 
@@ -606,6 +699,7 @@ where
         if *riid == IID_IUNKNOWN {
             unsafe { Self::shim_non_delegating_add_ref(this) };
             unsafe { *ppv = this };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
@@ -614,10 +708,12 @@ where
             let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
             unsafe { ((*vtbl).AddRef)(ptr) };
             unsafe { *ppv = ptr };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
         unsafe { *ppv = core::ptr::null_mut() };
+        core::mem::forget(guard);
         STATUS_NOINTERFACE
     }
 
@@ -824,16 +920,20 @@ where
     /// # Safety
     /// `this` must be a valid COM pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_add_ref(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_ptr(this) };
-        delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count)
+        let result = delegating_add_ref(wrapper.outer_unknown, &wrapper.ref_count);
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
     /// # Safety
     /// `this` must be a valid COM pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_release(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { &*(this as *const Self) };
-        delegating_release(wrapper.outer_unknown, &wrapper.ref_count, || {
+        let result = delegating_release(wrapper.outer_unknown, &wrapper.ref_count, || {
             let ptr = this as *mut Self;
             let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
@@ -844,7 +944,9 @@ where
             }
             alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
-        })
+        });
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
@@ -856,15 +958,19 @@ where
         riid: *const GUID,
         ppv: *mut *mut c_void,
     ) -> NTSTATUS {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_ptr(this) };
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
                 let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
-                return unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
+                let result = unsafe { ((*vtbl).QueryInterface)(outer, riid, ppv) };
+                core::mem::forget(guard);
+                return result;
             }
         }
 
         if ppv.is_null() || riid.is_null() {
+            core::mem::forget(guard);
             return STATUS_NOINTERFACE;
         }
 
@@ -873,6 +979,7 @@ where
         if *riid == IID_IUNKNOWN {
             unsafe { Self::shim_add_ref(this) };
             unsafe { *ppv = this };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
@@ -880,10 +987,12 @@ where
             let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
             unsafe { ((*vtbl).AddRef)(ptr) };
             unsafe { *ppv = ptr };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
         unsafe { *ppv = core::ptr::null_mut() };
+        core::mem::forget(guard);
         STATUS_NOINTERFACE
     }
 
@@ -891,14 +1000,18 @@ where
     /// # Safety
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_add_ref(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_non_delegating(this) };
-        refcount::add(&wrapper.ref_count)
+        let result = refcount::add(&wrapper.ref_count);
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
     /// # Safety
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
+        let guard = PanicGuard::new();
         let ptr = unsafe { Self::non_delegating_parent_ptr(this) };
         let count = refcount::sub(unsafe { &(*ptr).ref_count });
 
@@ -917,6 +1030,7 @@ where
             drop(alloc);
         }
 
+        core::mem::forget(guard);
         count
     }
 
@@ -929,9 +1043,11 @@ where
         riid: *const GUID,
         ppv: *mut *mut c_void,
     ) -> NTSTATUS {
+        let guard = PanicGuard::new();
         let wrapper = unsafe { Self::from_non_delegating(this) };
 
         if ppv.is_null() || riid.is_null() {
+            core::mem::forget(guard);
             return STATUS_NOINTERFACE;
         }
 
@@ -940,6 +1056,7 @@ where
         if *riid == IID_IUNKNOWN {
             unsafe { Self::shim_non_delegating_add_ref(this) };
             unsafe { *ppv = this };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
@@ -949,10 +1066,12 @@ where
             let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
             unsafe { ((*vtbl).AddRef)(ptr) };
             unsafe { *ppv = ptr };
+            core::mem::forget(guard);
             return STATUS_SUCCESS;
         }
 
         unsafe { *ppv = core::ptr::null_mut() };
+        core::mem::forget(guard);
         STATUS_NOINTERFACE
     }
 }

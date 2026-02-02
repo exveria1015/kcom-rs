@@ -60,6 +60,9 @@ builds, panics should be treated as fatal:
 - set `panic = "abort"`
 - optionally route to `KeBugCheckEx` in a panic handler
 
+All COM shims install a panic guard and fail-fast if unwinding would cross the
+FFI boundary.
+
 ## Refcount hardening and resurrection
 
 `refcount-hardening` adds overflow/underflow guards.

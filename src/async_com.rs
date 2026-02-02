@@ -21,7 +21,7 @@ use crate::GuardPtr;
 use crate::smart_ptr::{ComInterface, ComRc};
 use crate::traits::ComImpl;
 use crate::vtable::InterfaceVtable;
-use crate::wrapper::ComObject;
+use crate::wrapper::{ComObject, PanicGuard};
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -315,12 +315,15 @@ where
         if this.is_null() || out_status.is_null() {
             return STATUS_UNSUCCESSFUL;
         }
+        let guard = PanicGuard::new();
         let wrapper = unsafe { &*(this as *const ComObject<Self, AsyncOperationVtbl<T>>) };
         let status = wrapper.inner.load_status();
         unsafe {
             *out_status = status;
         }
-        STATUS_SUCCESS
+        let result = STATUS_SUCCESS;
+        core::mem::forget(guard);
+        result
     }
 
     #[allow(non_snake_case)]
@@ -331,8 +334,9 @@ where
         if this.is_null() || out_result.is_null() {
             return STATUS_UNSUCCESSFUL;
         }
+        let guard = PanicGuard::new();
         let wrapper = unsafe { &*(this as *const ComObject<Self, AsyncOperationVtbl<T>>) };
-        match wrapper.inner.load_status() {
+        let result = match wrapper.inner.load_status() {
             AsyncStatus::Completed => {
                 let value = wrapper.inner.read_result();
                 unsafe {
@@ -342,7 +346,9 @@ where
             }
             AsyncStatus::Started => STATUS_PENDING,
             AsyncStatus::Canceled | AsyncStatus::Error => wrapper.inner.load_error(),
-        }
+        };
+        core::mem::forget(guard);
+        result
     }
 }
 
