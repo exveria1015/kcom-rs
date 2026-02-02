@@ -8,12 +8,31 @@ use core::sync::atomic::{AtomicU32, Ordering};
 const MAX_REFCOUNT: u32 = i32::MAX as u32;
 
 #[cfg(feature = "refcount-hardening")]
+use crate::iunknown::STATUS_UNSUCCESSFUL;
+
+#[cfg(feature = "refcount-hardening")]
 #[cold]
 #[inline(never)]
 fn refcount_violation() -> ! {
     #[cfg(debug_assertions)]
-    crate::trace::report_error(file!(), line!(), crate::STATUS_UNSUCCESSFUL);
-    unsafe { core::intrinsics::abort() }
+    crate::trace::report_error(file!(), line!(), STATUS_UNSUCCESSFUL);
+
+    #[cfg(feature = "driver")]
+    unsafe {
+        crate::ntddk::KeBugCheckEx(0x4B43_4F4D, 0, 0, 0, 0);
+    }
+
+    #[cfg(all(not(feature = "driver"), test))]
+    {
+        std::process::abort();
+    }
+
+    #[cfg(all(not(feature = "driver"), not(test)))]
+    {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
 }
 
 #[cfg(not(feature = "refcount-hardening"))]

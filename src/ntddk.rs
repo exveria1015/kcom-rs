@@ -3,19 +3,41 @@
 
 #![allow(non_camel_case_types)]
 
+#[cfg(feature = "driver")]
 pub use wdk_sys::{
     APC_LEVEL, DISPATCH_LEVEL, EVENT_TYPE, KWAIT_REASON, KEVENT, UNICODE_STRING, _EVENT_TYPE,
     _KWAIT_REASON, _MODE,
 };
+#[cfg(feature = "driver")]
 pub use wdk_sys::{KDPC, KTIMER, LARGE_INTEGER, PKDPC, PKTIMER};
+#[cfg(feature = "driver")]
 pub use wdk_sys::{KIRQL, KSPIN_LOCK};
+#[cfg(feature = "driver")]
 pub use wdk_sys::ntddk::{
-    KeAcquireSpinLockRaiseToDpc, KeCancelTimer, KeGetCurrentIrql, KeInitializeDpc,
+    KeAcquireSpinLockRaiseToDpc, KeBugCheckEx, KeCancelTimer, KeGetCurrentIrql, KeInitializeDpc,
     KeInitializeEvent, KeInitializeSpinLock, KeInitializeTimer, KeInsertQueueDpc,
     KeReleaseSpinLock, KeRemoveQueueDpc, KeSetEvent, KeSetTimer, KeWaitForSingleObject,
     MmGetSystemRoutineAddress,
 };
+#[cfg(feature = "driver")]
 pub use wdk_sys::_EVENT_TYPE::SynchronizationEvent;
+
+#[cfg(not(feature = "driver"))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[allow(non_snake_case)]
+pub struct UNICODE_STRING {
+    pub Length: u16,
+    pub MaximumLength: u16,
+    pub Buffer: *mut u16,
+}
+
+// UNICODE_STRING is a plain data carrier; sharing is safe as long as the buffer
+// lifetime is managed by the caller (mirrors kernel ABI expectations).
+#[cfg(not(feature = "driver"))]
+unsafe impl Send for UNICODE_STRING {}
+#[cfg(not(feature = "driver"))]
+unsafe impl Sync for UNICODE_STRING {}
 
 
 #[cfg(all(feature = "async-com-kernel", driver_model__driver_type = "WDM"))]

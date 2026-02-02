@@ -294,6 +294,9 @@ pub struct WdkAllocator {
 }
 
 #[cfg(feature = "driver")]
+const WDK_ALLOC_ALIGNMENT: usize = if cfg!(target_pointer_width = "64") { 16 } else { 8 };
+
+#[cfg(feature = "driver")]
 impl WdkAllocator {
     #[inline]
     pub const fn new(pool: PoolType, tag: u32) -> Self {
@@ -305,6 +308,9 @@ impl WdkAllocator {
     pub unsafe fn alloc_uninitialized(&self, layout: Layout) -> *mut u8 {
         if layout.size() == 0 {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
+        }
+        if layout.align() > WDK_ALLOC_ALIGNMENT {
+            return core::ptr::null_mut();
         }
 
         let ptr = unsafe { ex_allocate_pool_uninitialized(self.pool, layout.size(), self.tag) };
@@ -319,6 +325,9 @@ impl Allocator for WdkAllocator {
         if layout.size() == 0 {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
+        if layout.align() > WDK_ALLOC_ALIGNMENT {
+            return core::ptr::null_mut();
+        }
 
         let ptr = unsafe { ex_allocate_pool_uninitialized(self.pool, layout.size(), self.tag) };
         ptr as *mut u8
@@ -328,6 +337,9 @@ impl Allocator for WdkAllocator {
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         if layout.size() == 0 {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
+        }
+        if layout.align() > WDK_ALLOC_ALIGNMENT {
+            return core::ptr::null_mut();
         }
 
         let ptr = unsafe { ex_allocate_pool(self.pool, layout.size(), self.tag) };

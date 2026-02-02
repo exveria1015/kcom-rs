@@ -35,7 +35,7 @@ impl fmt::Display for UnicodeStringError {
 macro_rules! kstr {
     ($lit:literal) => {{
         const BUF: &[u16] = &$crate::utf16_lit::utf16_null!($lit);
-        static UNICODE: $crate::UNICODE_STRING = $crate::UNICODE_STRING {
+        static UNICODE: $crate::ntddk::UNICODE_STRING = $crate::ntddk::UNICODE_STRING {
             Length: ((BUF.len() - 1) * 2) as u16,
             MaximumLength: (BUF.len() * 2) as u16,
             Buffer: BUF.as_ptr() as *mut u16,
@@ -246,6 +246,7 @@ pub unsafe fn unicode_string_to_string(unicode: &UNICODE_STRING) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn unicode_string_allows_max_len_minus_one() {
@@ -258,8 +259,10 @@ mod tests {
     #[test]
     fn unicode_string_rejects_overflow() {
         let value: String = std::iter::repeat('a').take(32_767).collect();
-        let err = OwnedUnicodeString::new(&value).unwrap_err();
-        assert_eq!(err, UnicodeStringError::TooLong);
+        assert!(matches!(
+            OwnedUnicodeString::new(&value),
+            Err(UnicodeStringError::TooLong)
+        ));
     }
 
     #[test]

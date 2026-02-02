@@ -813,9 +813,9 @@ impl Drop for KernelTimerFuture {
             let inner = self.inner;
             (*inner.as_ptr()).cancelled.store(1, Ordering::Release);
             let cancelled = KeCancelTimer(&mut (*inner.as_ptr()).timer as PKTIMER);
-            let _ = KeRemoveQueueDpc(&mut (*inner.as_ptr()).dpc as PKDPC);
+            let dpc_removed = KeRemoveQueueDpc(&mut (*inner.as_ptr()).dpc as PKDPC);
             KernelTimerInner::release(inner);
-            if cancelled != 0 {
+            if cancelled != 0 || dpc_removed != 0 {
                 KernelTimerInner::release(inner);
             }
         }
