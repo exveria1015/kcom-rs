@@ -22,7 +22,11 @@ fn resurrection_violation() -> ! {
     #[cfg(debug_assertions)]
     crate::trace::report_error(file!(), line!(), crate::iunknown::STATUS_UNSUCCESSFUL);
 
-    #[cfg(all(feature = "driver", any(feature = "async-com-kernel", feature = "kernel-unicode")))]
+    #[cfg(all(
+        feature = "driver",
+        any(feature = "async-com-kernel", feature = "kernel-unicode"),
+        not(miri)
+    ))]
     unsafe {
         crate::ntddk::KeBugCheckEx(0x4B43_4F4D, 0x52455355, 0, 0, 0);
     }

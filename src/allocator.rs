@@ -7,13 +7,13 @@ use core::pin::Pin;
 use core::ptr;
 use core::ptr::NonNull;
 use core::marker::PhantomData;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 use core::ffi::c_void;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 use core::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 use wdk_sys::ntddk::{KeGetCurrentIrql, MmGetSystemRoutineAddress};
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 use wdk_sys::{UNICODE_STRING, PASSIVE_LEVEL};
 
 use crate::iunknown::{NTSTATUS, Status, STATUS_INSUFFICIENT_RESOURCES};
@@ -267,10 +267,10 @@ pub fn init_box_with_tag<'a, T, E>(
 
 pub struct GlobalAllocator;
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const GLOBAL_POOL_TAG: u32 = u32::from_ne_bytes(*b"KCOM");
 
-#[cfg(not(feature = "driver"))]
+#[cfg(any(not(feature = "driver"), miri))]
 impl Allocator for GlobalAllocator {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -283,7 +283,7 @@ impl Allocator for GlobalAllocator {
     }
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 impl Allocator for GlobalAllocator {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -340,7 +340,7 @@ impl WdkAllocator {
     }
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 impl Allocator for WdkAllocator {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -377,22 +377,40 @@ impl Allocator for WdkAllocator {
     }
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", miri))]
+impl Allocator for WdkAllocator {
+    #[inline]
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        GlobalAllocator.alloc(layout)
+    }
+
+    #[inline]
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        GlobalAllocator.alloc_zeroed(layout)
+    }
+
+    #[inline]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        GlobalAllocator.dealloc(ptr, layout)
+    }
+}
+
+#[cfg(all(feature = "driver", not(miri)))]
 const POOL_FLAG_PAGED: u64 = 0x0000_0001;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const POOL_FLAG_UNINITIALIZED: u64 = 0x0000_0002;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const POOL_FLAG_NON_PAGED: u64 = 0x0000_0040;
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const POOL_TYPE_PAGED: u32 = 1;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const POOL_TYPE_NON_PAGED_NX: u32 = 512;
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 type ExAllocatePool2Fn = unsafe extern "C" fn(u64, usize, u32) -> *mut c_void;
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const EX_ALLOCATE_POOL2_NAME: [u16; 16] = [
     b'E' as u16,
     b'x' as u16,
@@ -412,15 +430,15 @@ const EX_ALLOCATE_POOL2_NAME: [u16; 16] = [
     0,
 ];
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const EX_ALLOCATE_POOL2_STATE_UNINIT: usize = 0;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const EX_ALLOCATE_POOL2_STATE_INITING: usize = 1;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const EX_ALLOCATE_POOL2_STATE_READY: usize = 2;
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 static EX_ALLOCATE_POOL2_PTR: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 static EX_ALLOCATE_POOL2_STATE: AtomicUsize = AtomicUsize::new(EX_ALLOCATE_POOL2_STATE_UNINIT);
 
 /// Resolve ExAllocatePool2 at PASSIVE_LEVEL (e.g. DriverEntry) and cache it.
@@ -429,13 +447,13 @@ static EX_ALLOCATE_POOL2_STATE: AtomicUsize = AtomicUsize::new(EX_ALLOCATE_POOL2
 /// allocations happen at elevated IRQL. Allocations will lazily attempt to
 /// resolve the routine if it has not been initialized yet, but that best-effort
 /// path may occur at unsuitable IRQLs, so prefer explicit initialization.
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 #[inline]
 pub unsafe fn init_ex_allocate_pool2() {
     unsafe { try_init_ex_allocate_pool2() };
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 unsafe fn ex_allocate_pool(pool: PoolType, size: usize, tag: u32) -> *mut c_void {
     let flags = match pool {
         PoolType::NonPagedNx => POOL_FLAG_NON_PAGED,
@@ -455,7 +473,7 @@ unsafe fn ex_allocate_pool(pool: PoolType, size: usize, tag: u32) -> *mut c_void
     ptr
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 unsafe fn ex_allocate_pool_uninitialized(pool: PoolType, size: usize, tag: u32) -> *mut c_void {
     let flags = match pool {
         PoolType::NonPagedNx => POOL_FLAG_NON_PAGED,
@@ -473,7 +491,7 @@ unsafe fn ex_allocate_pool_uninitialized(pool: PoolType, size: usize, tag: u32) 
     unsafe { ExAllocatePoolWithTag(pool_type, size, tag) }
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 unsafe fn try_init_ex_allocate_pool2() {
     let irql = unsafe { KeGetCurrentIrql() };
     if irql > PASSIVE_LEVEL as u8 {
@@ -501,7 +519,7 @@ unsafe fn try_init_ex_allocate_pool2() {
     EX_ALLOCATE_POOL2_STATE.store(EX_ALLOCATE_POOL2_STATE_READY, Ordering::Release);
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 unsafe fn get_ex_allocate_pool2() -> Option<ExAllocatePool2Fn> {
     if EX_ALLOCATE_POOL2_STATE.load(Ordering::Acquire) != EX_ALLOCATE_POOL2_STATE_READY {
         unsafe { try_init_ex_allocate_pool2() };
@@ -517,7 +535,7 @@ unsafe fn get_ex_allocate_pool2() -> Option<ExAllocatePool2Fn> {
     }
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 unsafe extern "C" {
     fn ExAllocatePoolWithTag(pool_type: u32, number_of_bytes: usize, tag: u32) -> *mut c_void;
     fn ExFreePoolWithTag(p: *mut c_void, tag: u32);

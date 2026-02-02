@@ -4,45 +4,45 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::future::Future;
-#[cfg(any(not(feature = "driver"), feature = "async-com-kernel"))]
+#[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use core::pin::Pin;
-#[cfg(any(not(feature = "driver"), feature = "async-com-kernel"))]
+#[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use core::task::{Context, Poll};
-#[cfg(not(feature = "driver"))]
+#[cfg(any(not(feature = "driver"), miri))]
 use core::cell::{Cell, RefCell};
-#[cfg(not(feature = "driver"))]
+#[cfg(any(not(feature = "driver"), miri))]
 use crate::alloc::boxed::Box;
 
 use crate::iunknown::{NTSTATUS, STATUS_NOT_SUPPORTED};
-#[cfg(any(not(feature = "driver"), feature = "async-com-kernel"))]
+#[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use crate::iunknown::STATUS_SUCCESS;
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use core::task::{RawWaker, RawWakerVTable, Waker};
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use core::cell::UnsafeCell;
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use core::ffi::c_void;
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use core::mem::ManuallyDrop;
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use core::ptr::{NonNull, null_mut};
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 use crate::ntddk::{
     DEVICE_OBJECT, IoAllocateWorkItem, IoFreeWorkItem, IoQueueWorkItem, ObDereferenceObject,
     ObReferenceObject, PIO_WORKITEM, PIO_WORKITEM_ROUTINE, WORK_QUEUE_TYPE,
 };
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
 #[allow(non_camel_case_types)]
 type DEVICE_OBJECT = core::ffi::c_void;
 
-#[cfg(not(feature = "driver"))]
+#[cfg(any(not(feature = "driver"), miri))]
 fn dummy_waker() -> core::task::Waker {
     use core::task::{RawWaker, RawWakerVTable, Waker};
 
@@ -56,37 +56,37 @@ fn dummy_waker() -> core::task::Waker {
     unsafe { Waker::from_raw(RawWaker::new(core::ptr::null(), &VTABLE)) }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::iunknown::STATUS_INSUFFICIENT_RESOURCES;
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::allocator::{Allocator, KBox, PoolType, WdkAllocator};
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::refcount;
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::ntddk::{
     KeAcquireSpinLockRaiseToDpc, KeCancelTimer, KeInitializeDpc, KeInitializeSpinLock,
     KeInitializeTimer, KeInsertQueueDpc, KeReleaseSpinLock, KeRemoveQueueDpc, KeSetTimer, KDPC,
     KIRQL, KSPIN_LOCK, PKDPC, KTIMER, LARGE_INTEGER, PKTIMER,
 };
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 type TaskPollFn = for<'a> unsafe fn(*mut TaskHeader, &mut Context<'a>) -> Poll<NTSTATUS>;
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[derive(Copy, Clone)]
 enum DestroyMode {
     Drop,
     Dealloc,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 struct TaskVTable {
     poll: TaskPollFn,
     destroy: unsafe fn(*mut TaskHeader, DestroyMode),
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[repr(C)]
 struct TaskHeader {
     ref_count: AtomicU32,
@@ -99,13 +99,13 @@ struct TaskHeader {
     tracker: *const TaskTracker,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 const DEFAULT_TASK_BUDGET: u32 = 64;
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 static DEFAULT_TASK_TAG: AtomicU32 = AtomicU32::new(u32::from_ne_bytes(*b"kcom"));
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 /// Override the default pool tag used by DPC task allocations.
 ///
 /// Call during driver initialization before spawning tasks.
@@ -114,20 +114,20 @@ pub fn set_task_alloc_tag(tag: u32) {
     DEFAULT_TASK_TAG.store(tag, Ordering::Release);
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 // NOTE: KeGetCurrentProcessorNumberEx returns a group-relative index.
 // Windows currently supports up to 64 processors per group and 64 groups.
 const MAX_PROC_PER_GROUP: usize = 64;
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 const MAX_GROUP_COUNT: usize = 64;
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 const MAX_CPU_COUNT: usize = MAX_PROC_PER_GROUP * MAX_GROUP_COUNT;
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 static CURRENT_TASKS: [AtomicPtr<TaskHeader>; MAX_CPU_COUNT] =
     [const { AtomicPtr::new(null_mut()) }; MAX_CPU_COUNT];
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[repr(C)]
 #[allow(dead_code, non_camel_case_types, non_snake_case)]
 struct PROCESSOR_NUMBER {
@@ -136,12 +136,12 @@ struct PROCESSOR_NUMBER {
     Reserved: u8,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 extern "system" {
     fn KeGetCurrentProcessorNumberEx(processor: *mut PROCESSOR_NUMBER);
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[inline]
 fn current_cpu_index() -> Option<usize> {
     let mut processor = PROCESSOR_NUMBER {
@@ -158,13 +158,13 @@ fn current_cpu_index() -> Option<usize> {
     Some(group * MAX_PROC_PER_GROUP + number)
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[inline]
 unsafe fn set_current_task(cpu_index: usize, ptr: NonNull<TaskHeader>) {
     CURRENT_TASKS[cpu_index].store(ptr.as_ptr(), Ordering::Release);
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[inline]
 unsafe fn clear_current_task(cpu_index: usize) {
     CURRENT_TASKS[cpu_index].store(null_mut(), Ordering::Release);
@@ -174,7 +174,7 @@ unsafe fn clear_current_task(cpu_index: usize) {
 ///
 /// Only valid inside tasks spawned by the DPC-based executor (spawn_dpc_task*). Work-item
 /// tasks may migrate across CPUs, so this helper will not reliably track their state.
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub fn is_cancellation_requested() -> bool {
     let irql = unsafe { crate::ntddk::KeGetCurrentIrql() };
     if irql < crate::ntddk::DISPATCH_LEVEL as u8 {
@@ -192,13 +192,13 @@ pub fn is_cancellation_requested() -> bool {
 }
 
 /// Stub for non-kernel builds.
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 pub fn is_cancellation_requested() -> bool {
     false
 }
 
 /// Returns true only once per cancellation request, then marks it as acknowledged.
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[inline]
 pub(crate) fn take_cancellation_request() -> bool {
     let irql = unsafe { crate::ntddk::KeGetCurrentIrql() };
@@ -221,13 +221,13 @@ pub(crate) fn take_cancellation_request() -> bool {
 }
 
 /// Stub for non-kernel builds.
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 #[inline]
 pub(crate) fn take_cancellation_request() -> bool {
     false
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl TaskHeader {
     #[inline]
     unsafe fn add_ref(ptr: NonNull<Self>) {
@@ -437,7 +437,7 @@ impl TaskHeader {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[repr(C)]
 struct Task<F>
 where
@@ -447,7 +447,7 @@ where
     future: ManuallyDrop<F>,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl<F> Task<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -528,17 +528,17 @@ where
 }
 
 /// Handle for requesting cancellation on a spawned task.
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub struct CancelHandle {
     task: AtomicPtr<TaskHeader>,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 unsafe impl Send for CancelHandle {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 unsafe impl Sync for CancelHandle {}
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl CancelHandle {
     #[inline]
     unsafe fn new(ptr: NonNull<TaskHeader>) -> Self {
@@ -571,7 +571,7 @@ impl CancelHandle {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl Drop for CancelHandle {
     fn drop(&mut self) {
         let ptr = self.task.swap(null_mut(), Ordering::AcqRel);
@@ -582,13 +582,13 @@ impl Drop for CancelHandle {
 }
 
 /// Stub handle for non-kernel builds.
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 pub struct CancelHandle {
     cancelled: Cell<bool>,
     future: RefCell<Option<Pin<Box<dyn Future<Output = NTSTATUS> + 'static>>>>,
 }
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 impl CancelHandle {
     #[inline]
     fn new(future: Option<Pin<Box<dyn Future<Output = NTSTATUS> + 'static>>>) -> Self {
@@ -610,17 +610,17 @@ impl CancelHandle {
     }
 }
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 impl Drop for CancelHandle {
     fn drop(&mut self) {
         let _ = self.future.borrow_mut().take();
     }
 }
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
 pub struct WorkItemTracker;
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
 impl WorkItemTracker {
     #[inline]
     pub fn new() -> Self {
@@ -631,18 +631,18 @@ impl WorkItemTracker {
     pub fn drain(&self) {}
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 struct SpinLock<T> {
     lock: UnsafeCell<KSPIN_LOCK>,
     value: UnsafeCell<T>,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 unsafe impl<T: Send> Send for SpinLock<T> {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 unsafe impl<T: Send> Sync for SpinLock<T> {}
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl<T> SpinLock<T> {
     #[inline]
     fn new(value: T) -> Self {
@@ -664,13 +664,13 @@ impl<T> SpinLock<T> {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
     old_irql: KIRQL,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl<T> core::ops::Deref for SpinLockGuard<'_, T> {
     type Target = T;
     #[inline]
@@ -679,7 +679,7 @@ impl<T> core::ops::Deref for SpinLockGuard<'_, T> {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl<T> core::ops::DerefMut for SpinLockGuard<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -687,7 +687,7 @@ impl<T> core::ops::DerefMut for SpinLockGuard<'_, T> {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl<T> Drop for SpinLockGuard<'_, T> {
     #[inline]
     fn drop(&mut self) {
@@ -695,7 +695,7 @@ impl<T> Drop for SpinLockGuard<'_, T> {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 struct KernelTimerInner {
     ref_count: AtomicU32,
     fired: AtomicU32,
@@ -706,7 +706,7 @@ struct KernelTimerInner {
     waker: SpinLock<Option<Waker>>,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl KernelTimerInner {
     unsafe fn allocate() -> Result<NonNull<Self>, NTSTATUS> {
         let alloc = WdkAllocator::new(PoolType::NonPagedNx, u32::from_ne_bytes(*b"irnt"));
@@ -762,16 +762,16 @@ impl KernelTimerInner {
 ///
 /// `due_time_100ns` must be a relative negative interval in 100ns units
 /// (i.e., like the `DueTime` passed to `KeSetTimer`).
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub struct KernelTimerFuture {
     inner: NonNull<KernelTimerInner>,
     due_time_100ns: i64,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 unsafe impl Send for KernelTimerFuture {}
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl KernelTimerFuture {
     #[inline]
     pub fn new(due_time_100ns: i64) -> Result<Self, NTSTATUS> {
@@ -804,7 +804,7 @@ impl KernelTimerFuture {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl Future for KernelTimerFuture {
     type Output = NTSTATUS;
 
@@ -849,7 +849,7 @@ impl Future for KernelTimerFuture {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl Drop for KernelTimerFuture {
     fn drop(&mut self) {
         unsafe {
@@ -865,7 +865,7 @@ impl Drop for KernelTimerFuture {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 struct WorkItemTask<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -881,7 +881,7 @@ where
 }
 
 /// Handle for requesting cancellation on a work-item task.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 pub struct WorkItemCancelHandle<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -889,10 +889,10 @@ where
     task: AtomicPtr<WorkItemTask<F>>,
 }
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
 pub struct WorkItemCancelHandle<F>(core::marker::PhantomData<F>);
 
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
 impl<F> WorkItemCancelHandle<F> {
     #[inline]
     pub fn cancel(&self) {}
@@ -903,12 +903,12 @@ impl<F> WorkItemCancelHandle<F> {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 unsafe impl<F> Send for WorkItemCancelHandle<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 unsafe impl<F> Sync for WorkItemCancelHandle<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 impl<F> WorkItemCancelHandle<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -946,7 +946,7 @@ where
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 impl<F> Clone for WorkItemCancelHandle<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -962,7 +962,7 @@ where
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 impl<F> Drop for WorkItemCancelHandle<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -976,18 +976,18 @@ where
 }
 
 /// Tracks outstanding work items so you can drain them before driver unload.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 pub struct WorkItemTracker {
     pending: AtomicU32,
     event: UnsafeCell<crate::ntddk::KEVENT>,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 unsafe impl Send for WorkItemTracker {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 unsafe impl Sync for WorkItemTracker {}
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 impl WorkItemTracker {
     #[inline]
     pub fn new() -> Self {
@@ -1050,7 +1050,7 @@ impl WorkItemTracker {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 #[inline]
 unsafe fn tracker_begin(tracker: *const WorkItemTracker) {
     if !tracker.is_null() {
@@ -1058,7 +1058,7 @@ unsafe fn tracker_begin(tracker: *const WorkItemTracker) {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 #[inline]
 unsafe fn tracker_complete(tracker: *const WorkItemTracker) {
     if !tracker.is_null() {
@@ -1066,7 +1066,7 @@ unsafe fn tracker_complete(tracker: *const WorkItemTracker) {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 impl<F> WorkItemTask<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -1301,16 +1301,16 @@ where
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 unsafe impl<F> Send for WorkItemTask<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 unsafe impl<F> Sync for WorkItemTask<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
 
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM).
 ///
 /// Note: ensure outstanding work items are drained before driver unload to
 /// avoid freeing device objects while work-item callbacks are still running.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 pub fn spawn_task<F>(device: *mut DEVICE_OBJECT, future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -1334,7 +1334,7 @@ where
 
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM), tracking
 /// outstanding work so you can drain before unload.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 pub fn spawn_task_tracked<F>(
     device: *mut DEVICE_OBJECT,
     tracker: &WorkItemTracker,
@@ -1364,7 +1364,7 @@ where
 
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM) and return a
 /// cancellation handle.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 pub fn spawn_task_cancellable<F>(
     device: *mut DEVICE_OBJECT,
     future: F,
@@ -1399,7 +1399,7 @@ where
 }
 
 /// Spawn a future onto the kcom DPC executor (driver build without async-com-kernel).
-#[cfg(all(feature = "driver", not(feature = "async-com-kernel")))]
+#[cfg(all(feature = "driver", not(feature = "async-com-kernel"), not(miri)))]
 pub unsafe fn spawn_dpc_task_cancellable<F>(_future: F) -> Result<CancelHandle, NTSTATUS>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -1408,7 +1408,7 @@ where
 }
 
 /// Spawn a future onto the kcom DPC executor (host stub).
-#[cfg(not(feature = "driver"))]
+#[cfg(any(not(feature = "driver"), miri))]
 pub unsafe fn spawn_dpc_task_cancellable<F>(future: F) -> Result<CancelHandle, NTSTATUS>
 where
     F: Future<Output = NTSTATUS> + 'static,
@@ -1425,7 +1425,7 @@ where
 
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM), tracking
 /// outstanding work and returning a cancellation handle.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 pub fn spawn_task_cancellable_tracked<F>(
     device: *mut DEVICE_OBJECT,
     tracker: &WorkItemTracker,
@@ -1461,7 +1461,7 @@ where
 }
 
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (unsupported builds).
-#[cfg(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
 pub fn spawn_task_cancellable_tracked<F>(
     _device: *mut DEVICE_OBJECT,
     _tracker: &WorkItemTracker,
@@ -1474,18 +1474,18 @@ where
 }
 
 /// Tracks outstanding DPC tasks so you can drain them before driver unload.
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub struct TaskTracker {
     pending: AtomicU32,
     event: UnsafeCell<crate::ntddk::KEVENT>,
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 unsafe impl Send for TaskTracker {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 unsafe impl Sync for TaskTracker {}
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl TaskTracker {
     #[inline]
     pub fn new() -> Self {
@@ -1548,7 +1548,7 @@ impl TaskTracker {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[inline]
 unsafe fn task_tracker_begin(tracker: *const TaskTracker) {
     if !tracker.is_null() {
@@ -1556,7 +1556,7 @@ unsafe fn task_tracker_begin(tracker: *const TaskTracker) {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[inline]
 unsafe fn task_tracker_complete(tracker: *const TaskTracker) {
     if !tracker.is_null() {
@@ -1564,7 +1564,7 @@ unsafe fn task_tracker_complete(tracker: *const TaskTracker) {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 /// Spawn a future onto the kcom DPC executor and return a cancellation handle.
 ///
 /// # IRQL
@@ -1602,7 +1602,7 @@ where
 /// # Driver unload
 /// Call [`TaskTracker::drain`] after stopping submissions to ensure all tracked
 /// tasks have completed before unload.
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub unsafe fn spawn_dpc_task_cancellable_tracked<F>(
     tracker: &TaskTracker,
     future: F,
@@ -1632,7 +1632,7 @@ where
 /// # Driver unload
 /// This function requires a [`TaskTracker`] to ensure all tasks have completed
 /// before unload.
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub unsafe fn spawn_dpc_task<F>(tracker: &TaskTracker, future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -1641,7 +1641,7 @@ where
 }
 
 /// Compatibility wrapper for spawning a tracked DPC task.
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub unsafe fn spawn_dpc_task_tracked<F>(tracker: &TaskTracker, future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
@@ -1658,7 +1658,7 @@ where
 }
 
 /// Spawn a future onto the kcom executor (host stub).
-#[cfg(not(feature = "driver"))]
+#[cfg(any(not(feature = "driver"), miri))]
 pub fn spawn_task<F>(mut future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + 'static,
@@ -1671,3 +1671,4 @@ where
         Poll::Pending => STATUS_SUCCESS,
     }
 }
+

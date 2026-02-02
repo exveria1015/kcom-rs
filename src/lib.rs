@@ -48,7 +48,9 @@ pub use allocator::{
     Allocator, GlobalAllocator, InitBox, InitBoxTrait, KBox, KBoxError, PinInit, PinInitOnce,
 };
 #[cfg(feature = "driver")]
-pub use allocator::{init_box_with_tag, init_ex_allocate_pool2, KernelInitBox, PoolType, WdkAllocator};
+pub use allocator::{init_box_with_tag, KernelInitBox, PoolType, WdkAllocator};
+#[cfg(all(feature = "driver", not(miri)))]
+pub use allocator::init_ex_allocate_pool2;
 #[cfg(feature = "kernel-unicode")]
 pub use unicode::{
     unicode_string_as_slice,
@@ -77,9 +79,13 @@ pub use async_com::{
 };
 
 pub use executor::{spawn_dpc_task_cancellable, CancelHandle};
-#[cfg(any(not(feature = "driver"), all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")))]
+#[cfg(any(
+    not(feature = "driver"),
+    miri,
+    all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri))
+))]
 pub use executor::spawn_task;
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub use executor::{
     set_task_alloc_tag,
     spawn_dpc_task,
@@ -88,9 +94,14 @@ pub use executor::{
     TaskTracker,
 };
 pub use task::{try_finally, Cancellable};
-#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub use executor::KernelTimerFuture;
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
+#[cfg(all(
+    feature = "driver",
+    feature = "async-com-kernel",
+    driver_model__driver_type = "WDM",
+    not(miri)
+))]
 pub use executor::{
     spawn_task_cancellable,
     spawn_task_cancellable_tracked,

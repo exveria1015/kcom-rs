@@ -203,18 +203,18 @@ where
     }
 
     #[inline]
-    unsafe fn load_status_raw(ptr: *const Self) -> AsyncStatus {
-        AsyncStatus::from_raw(unsafe { (*ptr).status.load(Ordering::Acquire) })
+    fn load_status(&self) -> AsyncStatus {
+        AsyncStatus::from_raw(self.status.load(Ordering::Acquire))
     }
 
     #[inline]
-    unsafe fn load_error_raw(ptr: *const Self) -> NTSTATUS {
-        unsafe { (*ptr).error.load(Ordering::Acquire) }
+    fn load_error(&self) -> NTSTATUS {
+        self.error.load(Ordering::Acquire)
     }
 
     #[inline]
-    unsafe fn read_result_raw(ptr: *const Self) -> T {
-        unsafe { (*(*ptr).result.get()).assume_init() }
+    fn read_result(&self) -> T {
+        unsafe { (*self.result.get()).assume_init() }
     }
 
     pub fn spawn_raw(future: F) -> Result<*mut AsyncOperationRaw<T>, NTSTATUS> {
@@ -315,9 +315,8 @@ where
         if this.is_null() || out_status.is_null() {
             return STATUS_UNSUCCESSFUL;
         }
-        let wrapper = this as *mut ComObject<Self, AsyncOperationVtbl<T>>;
-        let inner = unsafe { core::ptr::addr_of!((*wrapper).inner) };
-        let status = unsafe { Self::load_status_raw(inner) };
+        let wrapper = unsafe { &*(this as *const ComObject<Self, AsyncOperationVtbl<T>>) };
+        let status = wrapper.inner.load_status();
         unsafe {
             *out_status = status;
         }
@@ -332,18 +331,17 @@ where
         if this.is_null() || out_result.is_null() {
             return STATUS_UNSUCCESSFUL;
         }
-        let wrapper = this as *mut ComObject<Self, AsyncOperationVtbl<T>>;
-        let inner = unsafe { core::ptr::addr_of!((*wrapper).inner) };
-        match unsafe { Self::load_status_raw(inner) } {
+        let wrapper = unsafe { &*(this as *const ComObject<Self, AsyncOperationVtbl<T>>) };
+        match wrapper.inner.load_status() {
             AsyncStatus::Completed => {
-                let value = unsafe { Self::read_result_raw(inner) };
+                let value = wrapper.inner.read_result();
                 unsafe {
                     out_result.write(value);
                 }
                 STATUS_SUCCESS
             }
             AsyncStatus::Started => STATUS_PENDING,
-            AsyncStatus::Canceled | AsyncStatus::Error => unsafe { Self::load_error_raw(inner) },
+            AsyncStatus::Canceled | AsyncStatus::Error => wrapper.inner.load_error(),
         }
     }
 }
@@ -426,7 +424,7 @@ mod tests {
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    #[cfg(not(feature = "driver"))]
+    #[cfg(any(not(feature = "driver"), miri))]
     use core::sync::atomic::Ordering;
 
     #[test]
@@ -434,9 +432,11 @@ mod tests {
         let _guard = TEST_LOCK.lock().unwrap();
         let op = spawn_async_operation(async { 11u32 }).expect("spawn async operation");
         unsafe {
-            let status = op.get_status().expect("get status");
+            let status =
+                AsyncOperationRaw::<u32>::get_status_raw(op.as_ptr()).expect("get status");
             assert_eq!(status, AsyncStatus::Completed);
-            let result = op.get_result().expect("get result");
+            let result =
+                AsyncOperationRaw::<u32>::get_result_raw(op.as_ptr()).expect("get result");
             assert_eq!(result, 11u32);
         }
     }
@@ -446,27 +446,29 @@ mod tests {
         let _guard = TEST_LOCK.lock().unwrap();
         let op = spawn_async_operation_error::<u32>(STATUS_UNSUCCESSFUL).expect("spawn error op");
         unsafe {
-            let status = op.get_status().expect("get status");
+            let status =
+                AsyncOperationRaw::<u32>::get_status_raw(op.as_ptr()).expect("get status");
             assert_eq!(status, AsyncStatus::Error);
-            let result = op.get_result();
+            let result = AsyncOperationRaw::<u32>::get_result_raw(op.as_ptr());
             assert!(matches!(result, Err(STATUS_UNSUCCESSFUL)));
         }
     }
 
-    #[cfg(not(feature = "driver"))]
+    #[cfg(any(not(feature = "driver"), miri))]
     #[test]
     fn pending_future_reports_pending() {
         let _guard = TEST_LOCK.lock().unwrap();
         let op = spawn_async_operation(core::future::pending::<u32>()).expect("spawn async operation");
         unsafe {
-            let status = op.get_status().expect("get status");
+            let status =
+                AsyncOperationRaw::<u32>::get_status_raw(op.as_ptr()).expect("get status");
             assert_eq!(status, AsyncStatus::Started);
-            let result = op.get_result();
+            let result = AsyncOperationRaw::<u32>::get_result_raw(op.as_ptr());
             assert!(matches!(result, Err(STATUS_PENDING)));
         }
     }
 
-    #[cfg(not(feature = "driver"))]
+    #[cfg(any(not(feature = "driver"), miri))]
     #[test]
     fn pending_future_drop_releases_task_ref() {
         let _guard = TEST_LOCK.lock().unwrap();
