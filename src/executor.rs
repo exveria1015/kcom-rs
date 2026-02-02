@@ -8,6 +8,10 @@ use core::future::Future;
 use core::pin::Pin;
 #[cfg(any(not(feature = "driver"), feature = "async-com-kernel"))]
 use core::task::{Context, Poll};
+#[cfg(not(feature = "driver"))]
+use core::cell::{Cell, RefCell};
+#[cfg(not(feature = "driver"))]
+use crate::alloc::boxed::Box;
 
 use crate::iunknown::{NTSTATUS, STATUS_NOT_SUPPORTED};
 #[cfg(any(not(feature = "driver"), feature = "async-com-kernel"))]
@@ -112,10 +116,12 @@ pub fn set_task_alloc_tag(tag: u32) {
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 // NOTE: KeGetCurrentProcessorNumberEx returns a group-relative index.
-// MAX_CPU_COUNT=64 is sufficient for typical systems, but processor-group
-// configurations may alias indices. Consider dynamic sizing if you need
-// perfect mapping on >64 logical CPUs.
-const MAX_CPU_COUNT: usize = 64;
+// Windows currently supports up to 64 processors per group and 64 groups.
+const MAX_PROC_PER_GROUP: usize = 64;
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+const MAX_GROUP_COUNT: usize = 64;
+#[cfg(all(feature = "driver", feature = "async-com-kernel"))]
+const MAX_CPU_COUNT: usize = MAX_PROC_PER_GROUP * MAX_GROUP_COUNT;
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 static CURRENT_TASKS: [AtomicPtr<TaskHeader>; MAX_CPU_COUNT] =
@@ -137,15 +143,19 @@ extern "system" {
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
 #[inline]
-fn current_cpu_index() -> usize {
+fn current_cpu_index() -> Option<usize> {
     let mut processor = PROCESSOR_NUMBER {
         Group: 0,
         Number: 0,
         Reserved: 0,
     };
     unsafe { KeGetCurrentProcessorNumberEx(&mut processor) };
-    let index = ((processor.Group as usize) << 6) | (processor.Number as usize);
-    index % MAX_CPU_COUNT
+    let group = processor.Group as usize;
+    let number = processor.Number as usize;
+    if group >= MAX_GROUP_COUNT || number >= MAX_PROC_PER_GROUP {
+        return None;
+    }
+    Some(group * MAX_PROC_PER_GROUP + number)
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel"))]
@@ -170,7 +180,10 @@ pub fn is_cancellation_requested() -> bool {
     if irql < crate::ntddk::DISPATCH_LEVEL as u8 {
         return false;
     }
-    let ptr = CURRENT_TASKS[current_cpu_index()].load(Ordering::Acquire);
+    let Some(cpu_index) = current_cpu_index() else {
+        return false;
+    };
+    let ptr = CURRENT_TASKS[cpu_index].load(Ordering::Acquire);
     if ptr.is_null() {
         return false;
     }
@@ -192,7 +205,10 @@ pub(crate) fn take_cancellation_request() -> bool {
     if irql < crate::ntddk::DISPATCH_LEVEL as u8 {
         return false;
     }
-    let ptr = CURRENT_TASKS[current_cpu_index()].load(Ordering::Acquire);
+    let Some(cpu_index) = current_cpu_index() else {
+        return false;
+    };
+    let ptr = CURRENT_TASKS[cpu_index].load(Ordering::Acquire);
     if ptr.is_null() {
         return false;
     }
@@ -327,7 +343,9 @@ impl TaskHeader {
         let waker = unsafe { Waker::from_raw(Self::raw_waker(ptr)) };
         let mut cx = Context::from_waker(&waker);
 
-        unsafe { set_current_task(cpu_index, ptr) };
+        if let Some(cpu_index) = cpu_index {
+            unsafe { set_current_task(cpu_index, ptr) };
+        }
         let mut budget = DEFAULT_TASK_BUDGET;
 
         loop {
@@ -338,7 +356,9 @@ impl TaskHeader {
                     unsafe {
                         ((*ptr.as_ptr()).vtable.destroy)(ptr.as_ptr(), DestroyMode::Drop)
                     };
-                    unsafe { clear_current_task(cpu_index) };
+                    if let Some(cpu_index) = cpu_index {
+                        unsafe { clear_current_task(cpu_index) };
+                    }
                     unsafe { Self::release(ptr) };
                     return;
                 }
@@ -364,7 +384,9 @@ impl TaskHeader {
             }
         }
 
-        unsafe { clear_current_task(cpu_index) };
+        if let Some(cpu_index) = cpu_index {
+            unsafe { clear_current_task(cpu_index) };
+        }
         unsafe { Self::release(ptr) };
     }
 
@@ -561,16 +583,37 @@ impl Drop for CancelHandle {
 
 /// Stub handle for non-kernel builds.
 #[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
-pub struct CancelHandle;
+pub struct CancelHandle {
+    cancelled: Cell<bool>,
+    future: RefCell<Option<Pin<Box<dyn Future<Output = NTSTATUS> + 'static>>>>,
+}
 
 #[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
 impl CancelHandle {
     #[inline]
-    pub fn cancel(&self) {}
+    fn new(future: Option<Pin<Box<dyn Future<Output = NTSTATUS> + 'static>>>) -> Self {
+        Self {
+            cancelled: Cell::new(false),
+            future: RefCell::new(future),
+        }
+    }
+
+    #[inline]
+    pub fn cancel(&self) {
+        self.cancelled.set(true);
+        let _ = self.future.borrow_mut().take();
+    }
 
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        false
+        self.cancelled.get()
+    }
+}
+
+#[cfg(not(all(feature = "driver", feature = "async-com-kernel")))]
+impl Drop for CancelHandle {
+    fn drop(&mut self) {
+        let _ = self.future.borrow_mut().take();
     }
 }
 
@@ -1366,16 +1409,18 @@ where
 
 /// Spawn a future onto the kcom DPC executor (host stub).
 #[cfg(not(feature = "driver"))]
-pub unsafe fn spawn_dpc_task_cancellable<F>(mut future: F) -> Result<CancelHandle, NTSTATUS>
+pub unsafe fn spawn_dpc_task_cancellable<F>(future: F) -> Result<CancelHandle, NTSTATUS>
 where
     F: Future<Output = NTSTATUS> + 'static,
 {
     let waker = dummy_waker();
 
     let mut cx = Context::from_waker(&waker);
-    let mut future = unsafe { Pin::new_unchecked(&mut future) };
-    let _ = future.as_mut().poll(&mut cx);
-    Ok(CancelHandle)
+    let mut future: Pin<Box<dyn Future<Output = NTSTATUS> + 'static>> = Box::pin(future);
+    match future.as_mut().poll(&mut cx) {
+        Poll::Ready(_) => Ok(CancelHandle::new(None)),
+        Poll::Pending => Ok(CancelHandle::new(Some(future))),
+    }
 }
 
 /// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM), tracking

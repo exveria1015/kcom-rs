@@ -16,8 +16,9 @@ pub trait ComImpl<I: InterfaceVtable>: Sized + Sync + 'static {
     /// Returns a *stable COM interface pointer* if supported.
     ///
     /// The returned pointer must reference a vtable matching `riid`.
-    /// Returning `this` is only valid for the primary interface whose vtable
-    /// begins at offset 0 within the object.
+    /// The `this` pointer is expected to be the canonical primary interface
+    /// pointer (vtable at offset 0). Returning `this` is only valid for the
+    /// primary interface whose vtable begins at offset 0 within the object.
     /// For other interfaces, return explicit tear-offs or aggregated pointers.
     /// The `ComObject` wrapper performs `AddRef` on returned pointers.
 

@@ -334,23 +334,13 @@ macro_rules! impl_com_interface_multiple {
                     if this.is_null() {
                         return None;
                     }
-
-                    let wrapper_ref = unsafe {
-                        $crate::wrapper::ComObjectN::<
-                            $ty,
-                            [<$primary Vtbl>],
-                            $crate::__kcom_vtbl_tuple!(($($sec),+)),
-                            $alloc,
-                        >::from_secondary_ptr::<[<$trait_name Vtbl>], { $index }>(this)
-                    };
-
-                    let wrapper = wrapper_ref as *const _ as *mut $crate::wrapper::ComObjectN<
+                    let wrapper = this as *mut $crate::wrapper::ComObjectN<
                         $ty,
                         [<$primary Vtbl>],
                         $crate::__kcom_vtbl_tuple!(($($sec),+)),
                         $alloc,
                     >;
-                    let primary_ptr = wrapper as *const _ as *mut core::ffi::c_void;
+                    let primary_ptr = this;
 
                     if *riid == <[<$primary Interface>] as $crate::vtable::ComInterfaceInfo>::IID {
                         return Some(primary_ptr);

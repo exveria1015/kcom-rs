@@ -16,6 +16,37 @@ use crate::traits::ComImpl;
 use crate::vtable::{ComInterfaceInfo, InterfaceVtable};
 use crate::refcount;
 
+#[cold]
+#[inline(never)]
+fn resurrection_violation() -> ! {
+    #[cfg(debug_assertions)]
+    crate::trace::report_error(file!(), line!(), crate::iunknown::STATUS_UNSUCCESSFUL);
+
+    #[cfg(all(feature = "driver", any(feature = "async-com-kernel", feature = "kernel-unicode")))]
+    unsafe {
+        crate::ntddk::KeBugCheckEx(0x4B43_4F4D, 0x52455355, 0, 0, 0);
+    }
+
+    #[cfg(all(not(feature = "driver"), test))]
+    {
+        std::process::abort();
+    }
+
+    #[cfg(all(not(feature = "driver"), not(test)))]
+    {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    #[cfg(all(feature = "driver", not(any(feature = "async-com-kernel", feature = "kernel-unicode"))))]
+    {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+}
+
 #[inline]
 unsafe fn delegating_add_ref(
     outer_unknown: Option<*mut c_void>,
@@ -386,14 +417,9 @@ where
             let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
             core::ptr::drop_in_place(&mut (*ptr).inner);
-            #[cfg(debug_assertions)]
-            {
-                let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
-                debug_assert_eq!(
-                    resurrected,
-                    0,
-                    "ComObject resurrected during Drop; this is unsupported"
-                );
+            let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+            if resurrected != 0 {
+                resurrection_violation();
             }
             alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
@@ -535,14 +561,9 @@ where
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
                 core::ptr::drop_in_place(&mut (*ptr).inner);
-                #[cfg(debug_assertions)]
-                {
-                    let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
-                    debug_assert_eq!(
-                        resurrected,
-                        0,
-                        "ComObject resurrected during Drop; this is unsupported"
-                    );
+                let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+                if resurrected != 0 {
+                    resurrection_violation();
                 }
                 alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }
@@ -786,14 +807,9 @@ where
             let alloc = core::ptr::read(&(*ptr).alloc);
             let alloc = ManuallyDrop::into_inner(alloc);
             core::ptr::drop_in_place(&mut (*ptr).inner);
-            #[cfg(debug_assertions)]
-            {
-                let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
-                debug_assert_eq!(
-                    resurrected,
-                    0,
-                    "ComObjectN resurrected during Drop; this is unsupported"
-                );
+            let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+            if resurrected != 0 {
+                resurrection_violation();
             }
             alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             drop(alloc);
@@ -862,14 +878,9 @@ where
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
                 core::ptr::drop_in_place(&mut (*ptr).inner);
-                #[cfg(debug_assertions)]
-                {
-                    let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
-                    debug_assert_eq!(
-                        resurrected,
-                        0,
-                        "ComObjectN resurrected during Drop; this is unsupported"
-                    );
+                let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
+                if resurrected != 0 {
+                    resurrection_violation();
                 }
                 alloc.dealloc(ptr as *mut u8, Self::LAYOUT);
             }

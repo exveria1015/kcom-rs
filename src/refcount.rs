@@ -17,7 +17,7 @@ fn refcount_violation() -> ! {
     #[cfg(debug_assertions)]
     crate::trace::report_error(file!(), line!(), STATUS_UNSUCCESSFUL);
 
-    #[cfg(feature = "driver")]
+    #[cfg(all(feature = "driver", any(feature = "async-com-kernel", feature = "kernel-unicode")))]
     unsafe {
         crate::ntddk::KeBugCheckEx(0x4B43_4F4D, 0, 0, 0, 0);
     }
@@ -28,6 +28,13 @@ fn refcount_violation() -> ! {
     }
 
     #[cfg(all(not(feature = "driver"), not(test)))]
+    {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    #[cfg(all(feature = "driver", not(any(feature = "async-com-kernel", feature = "kernel-unicode"))))]
     {
         loop {
             core::hint::spin_loop();

@@ -40,6 +40,6 @@ mod executor_edge_spec {
         assert_eq!(polls.load(Ordering::Relaxed), 1);
         assert!(!handle.is_cancelled());
         handle.cancel();
-        assert!(!handle.is_cancelled());
+        assert!(handle.is_cancelled());
     }
 }
