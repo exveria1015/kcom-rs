@@ -4,8 +4,8 @@ use core::ffi::c_void;
 #[repr(transparent)]
 #[derive(Copy, Clone)]
 pub struct GuardPtr(
-    #[cfg(feature = "strict-provenance")] *mut c_void,
-    #[cfg(not(feature = "strict-provenance"))] usize,
+    #[cfg(any(feature = "strict-provenance", kcom_strict_provenance, miri))] *mut c_void,
+    #[cfg(not(any(feature = "strict-provenance", kcom_strict_provenance, miri)))] usize,
 );
 
 unsafe impl Send for GuardPtr {}
@@ -14,11 +14,11 @@ unsafe impl Sync for GuardPtr {}
 impl GuardPtr {
     #[inline]
     pub fn new(ptr: *mut c_void) -> Self {
-        #[cfg(feature = "strict-provenance")]
+        #[cfg(any(feature = "strict-provenance", kcom_strict_provenance, miri))]
         {
             Self(ptr)
         }
-        #[cfg(not(feature = "strict-provenance"))]
+        #[cfg(not(any(feature = "strict-provenance", kcom_strict_provenance, miri)))]
         {
             Self(ptr as usize)
         }
@@ -26,11 +26,11 @@ impl GuardPtr {
 
     #[inline]
     pub fn as_ptr(self) -> *mut c_void {
-        #[cfg(feature = "strict-provenance")]
+        #[cfg(any(feature = "strict-provenance", kcom_strict_provenance, miri))]
         {
             self.0
         }
-        #[cfg(not(feature = "strict-provenance"))]
+        #[cfg(not(any(feature = "strict-provenance", kcom_strict_provenance, miri)))]
         {
             self.0 as *mut c_void
         }

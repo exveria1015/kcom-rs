@@ -13,7 +13,9 @@ use core::cell::{Cell, RefCell};
 #[cfg(any(not(feature = "driver"), miri))]
 use crate::alloc::boxed::Box;
 
-use crate::iunknown::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_NOT_SUPPORTED};
+use crate::iunknown::{NTSTATUS, STATUS_NOT_SUPPORTED};
+#[cfg(all(feature = "driver", not(miri)))]
+use crate::iunknown::STATUS_INVALID_PARAMETER;
 #[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use crate::iunknown::STATUS_SUCCESS;
 
@@ -153,6 +155,11 @@ fn current_cpu_index() -> Option<usize> {
     let group = processor.Group as usize;
     let number = processor.Number as usize;
     if group >= MAX_GROUP_COUNT || number >= MAX_PROC_PER_GROUP {
+        #[cfg(debug_assertions)]
+        crate::trace::trace(format_args!(
+            "kcom warning: processor index out of range (group={}, number={}, max_group={}, max_per_group={})",
+            group, number, MAX_GROUP_COUNT, MAX_PROC_PER_GROUP
+        ));
         return None;
     }
     Some(group * MAX_PROC_PER_GROUP + number)

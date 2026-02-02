@@ -198,6 +198,7 @@ impl<const N: usize> LocalUnicodeString<N> {
     /// Returns a UNICODE_STRING value that borrows the internal buffer.
     ///
     /// The returned value must not be stored beyond the lifetime of `self`.
+    /// Prefer `as_unicode_ref()` when you need a lifetime-tied view.
     #[inline]
     pub fn as_unicode(&self) -> UNICODE_STRING {
         let max_units = (u16::MAX as usize) / 2;
