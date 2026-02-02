@@ -17,6 +17,7 @@ use crate::iunknown::{
     GUID, IUnknownVtbl, NTSTATUS, STATUS_CANCELLED, STATUS_PENDING, STATUS_SUCCESS,
     STATUS_UNSUCCESSFUL,
 };
+use crate::GuardPtr;
 use crate::smart_ptr::{ComInterface, ComRc};
 use crate::traits::ComImpl;
 use crate::vtable::InterfaceVtable;
@@ -85,17 +86,25 @@ unsafe impl<T: AsyncValueType> ComInterface for AsyncOperationRaw<T> {}
 impl<T: AsyncValueType> AsyncOperationRaw<T> {
     #[inline]
     pub unsafe fn get_status(&self) -> Result<AsyncStatus, NTSTATUS> {
-        let vtbl = self.lpVtbl;
+        unsafe { Self::get_status_raw(self as *const _ as *mut Self) }
+    }
+
+    #[inline]
+    pub unsafe fn get_result(&self) -> Result<T, NTSTATUS> {
+        unsafe { Self::get_result_raw(self as *const _ as *mut Self) }
+    }
+
+    #[inline]
+    pub unsafe fn get_status_raw(this: *mut Self) -> Result<AsyncStatus, NTSTATUS> {
+        if this.is_null() {
+            return Err(STATUS_UNSUCCESSFUL);
+        }
+        let vtbl = unsafe { (*this).lpVtbl };
         if vtbl.is_null() {
             return Err(STATUS_UNSUCCESSFUL);
         }
         let mut status = AsyncStatus::Started;
-        let result = unsafe {
-            ((*vtbl).get_status)(
-                self as *const _ as *mut c_void,
-                &mut status as *mut AsyncStatus,
-            )
-        };
+        let result = unsafe { ((*vtbl).get_status)(this as *mut c_void, &mut status as *mut AsyncStatus) };
         if result < 0 {
             Err(result)
         } else {
@@ -104,18 +113,16 @@ impl<T: AsyncValueType> AsyncOperationRaw<T> {
     }
 
     #[inline]
-    pub unsafe fn get_result(&self) -> Result<T, NTSTATUS> {
-        let vtbl = self.lpVtbl;
+    pub unsafe fn get_result_raw(this: *mut Self) -> Result<T, NTSTATUS> {
+        if this.is_null() {
+            return Err(STATUS_UNSUCCESSFUL);
+        }
+        let vtbl = unsafe { (*this).lpVtbl };
         if vtbl.is_null() {
             return Err(STATUS_UNSUCCESSFUL);
         }
         let mut out = core::mem::MaybeUninit::<T>::uninit();
-        let result = unsafe {
-            ((*vtbl).get_result)(
-                self as *const _ as *mut c_void,
-                out.as_mut_ptr(),
-            )
-        };
+        let result = unsafe { ((*vtbl).get_result)(this as *mut c_void, out.as_mut_ptr()) };
         if result == STATUS_SUCCESS {
             Ok(unsafe { out.assume_init() })
         } else {
@@ -196,8 +203,18 @@ where
     }
 
     #[inline]
-    fn load_status(&self) -> AsyncStatus {
-        AsyncStatus::from_raw(self.status.load(Ordering::Acquire))
+    unsafe fn load_status_raw(ptr: *const Self) -> AsyncStatus {
+        AsyncStatus::from_raw(unsafe { (*ptr).status.load(Ordering::Acquire) })
+    }
+
+    #[inline]
+    unsafe fn load_error_raw(ptr: *const Self) -> NTSTATUS {
+        unsafe { (*ptr).error.load(Ordering::Acquire) }
+    }
+
+    #[inline]
+    unsafe fn read_result_raw(ptr: *const Self) -> T {
+        unsafe { (*(*ptr).result.get()).assume_init() }
     }
 
     pub fn spawn_raw(future: F) -> Result<*mut AsyncOperationRaw<T>, NTSTATUS> {
@@ -220,7 +237,7 @@ where
             T: AsyncValueType,
             F: Future<Output = T> + Send + 'static,
         {
-            ptr: usize,
+            ptr: GuardPtr,
             _marker: PhantomData<(T, F)>,
         }
 
@@ -230,16 +247,15 @@ where
             F: Future<Output = T> + Send + 'static,
         {
             fn drop(&mut self) {
-                let ptr = self.ptr as *mut c_void;
                 unsafe {
                     ComObject::<AsyncOperationTask<T, F>, AsyncOperationVtbl<T>>::shim_release(
-                        ptr,
+                        self.ptr.as_ptr(),
                     );
                 }
             }
         }
 
-        let task_ptr = ptr as usize;
+        let task_ptr = GuardPtr::new(ptr);
         let task = async move {
             let _guard = TaskGuard::<T, F> {
                 ptr: task_ptr,
@@ -247,9 +263,7 @@ where
             };
 
             let result = crate::task::try_finally(future, async {}).await;
-            let task_ptr = task_ptr as *mut c_void;
-            let wrapper =
-                unsafe { ComObject::<Self, AsyncOperationVtbl<T>>::from_ptr(task_ptr) };
+            let wrapper = unsafe { ComObject::<Self, AsyncOperationVtbl<T>>::from_ptr(task_ptr.as_ptr()) };
             match result {
                 Some(value) => wrapper.inner.store_result(value),
                 None => wrapper.inner.store_canceled(),
@@ -301,8 +315,9 @@ where
         if this.is_null() || out_status.is_null() {
             return STATUS_UNSUCCESSFUL;
         }
-        let wrapper = unsafe { ComObject::<Self, AsyncOperationVtbl<T>>::from_ptr(this) };
-        let status = wrapper.inner.load_status();
+        let wrapper = this as *mut ComObject<Self, AsyncOperationVtbl<T>>;
+        let inner = unsafe { core::ptr::addr_of!((*wrapper).inner) };
+        let status = unsafe { Self::load_status_raw(inner) };
         unsafe {
             *out_status = status;
         }
@@ -317,17 +332,18 @@ where
         if this.is_null() || out_result.is_null() {
             return STATUS_UNSUCCESSFUL;
         }
-        let wrapper = unsafe { ComObject::<Self, AsyncOperationVtbl<T>>::from_ptr(this) };
-        match wrapper.inner.load_status() {
+        let wrapper = this as *mut ComObject<Self, AsyncOperationVtbl<T>>;
+        let inner = unsafe { core::ptr::addr_of!((*wrapper).inner) };
+        match unsafe { Self::load_status_raw(inner) } {
             AsyncStatus::Completed => {
-                let value = unsafe { (*wrapper.inner.result.get()).assume_init() };
+                let value = unsafe { Self::read_result_raw(inner) };
                 unsafe {
                     out_result.write(value);
                 }
                 STATUS_SUCCESS
             }
             AsyncStatus::Started => STATUS_PENDING,
-            AsyncStatus::Canceled | AsyncStatus::Error => wrapper.inner.error.load(Ordering::Acquire),
+            AsyncStatus::Canceled | AsyncStatus::Error => unsafe { Self::load_error_raw(inner) },
         }
     }
 }

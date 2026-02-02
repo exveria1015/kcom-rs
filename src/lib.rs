@@ -21,6 +21,7 @@ pub mod task;
 pub mod vtable;
 mod refcount;
 pub mod trace;
+mod guard_ptr;
 #[cfg(feature = "async-com")]
 pub mod async_com;
 #[cfg(feature = "kernel-unicode")]
@@ -57,6 +58,8 @@ pub use unicode::{
     UnicodeStringError,
 };
 pub use wrapper::{ComObject, ComObjectN};
+#[doc(hidden)]
+pub use guard_ptr::GuardPtr;
 
 #[cfg(feature = "async-com")]
 pub use async_com::{

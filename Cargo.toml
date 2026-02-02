@@ -2,6 +2,7 @@
 name = "kcom"
 version = "0.4.0"
 edition = "2021"
+autotests = false
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 description = "Zero-copy COM runtime for Windows kernel drivers in Rust."
@@ -29,6 +30,7 @@ kernel-unicode = ["utf16_lit"]
 driver = ["wdk-sys"]
 driver-test-stub = ["driver"]
 refcount-hardening = []
+strict-provenance = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(driver_model__driver_type, values("WDM", "KMDF"))'] }
@@ -64,3 +66,7 @@ harness = false
 name = "comparison_async"
 harness = false
 required-features = ["async-com"]
+
+[workspace]
+members = [".", "kcom-tests"]
+resolver = "2"

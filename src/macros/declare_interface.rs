@@ -338,15 +338,15 @@ macro_rules! __kcom_define_interface {
                     };
                     let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_release;
-                    let guard_ptr = this as usize;
+                    let guard_ptr = $crate::GuardPtr::new(this);
                     let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
                         struct ReleaseGuard {
-                            ptr: usize,
+                            ptr: $crate::GuardPtr,
                             release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
                         }
                         impl Drop for ReleaseGuard {
                             fn drop(&mut self) {
-                                unsafe { (self.release)(self.ptr as *mut core::ffi::c_void) };
+                                unsafe { (self.release)(self.ptr.as_ptr()) };
                             }
                         }
                         let _guard = ReleaseGuard {
@@ -405,15 +405,15 @@ macro_rules! __kcom_define_interface {
                     };
                     let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
                         $crate::wrapper::ComObjectN::<T, P, S, A>::shim_release;
-                    let guard_ptr = primary as usize;
+                    let guard_ptr = $crate::GuardPtr::new(primary);
                     let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
                         struct ReleaseGuard {
-                            ptr: usize,
+                            ptr: $crate::GuardPtr,
                             release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
                         }
                         impl Drop for ReleaseGuard {
                             fn drop(&mut self) {
-                                unsafe { (self.release)(self.ptr as *mut core::ffi::c_void) };
+                                unsafe { (self.release)(self.ptr.as_ptr()) };
                             }
                         }
                         let _guard = ReleaseGuard {

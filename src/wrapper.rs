@@ -490,8 +490,8 @@ where
         I: InterfaceVtable,
         S::Entries: SecondaryEntryAccess<INDEX, I>,
     {
-        let wrapper = unsafe { Self::from_secondary_ptr::<I, INDEX>(this) };
-        let primary = wrapper as *const _ as *mut c_void;
+        let primary =
+            unsafe { <S::Entries as SecondaryEntryAccess<INDEX, I>>::parent_from_ptr(this) };
         unsafe { Self::shim_release(primary) }
     }
 
@@ -507,8 +507,9 @@ where
         I: InterfaceVtable,
         S::Entries: SecondaryEntryAccess<INDEX, I>,
     {
-        let wrapper = unsafe { Self::from_secondary_ptr::<I, INDEX>(this) };
-        let primary = wrapper as *const _ as *mut c_void;
+        let primary =
+            unsafe { <S::Entries as SecondaryEntryAccess<INDEX, I>>::parent_from_ptr(this) };
+        let wrapper = unsafe { Self::from_ptr(primary) };
         if let Some(outer) = wrapper.outer_unknown {
             if !outer.is_null() {
                 let vtbl = unsafe { *(outer as *mut *mut IUnknownVtbl) };
@@ -551,16 +552,15 @@ where
     /// # Safety
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObjectN` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
-        let wrapper = unsafe { Self::from_non_delegating(this) };
-        let count = refcount::sub(&wrapper.ref_count);
+        let ptr = unsafe { Self::non_delegating_parent_ptr(this) };
+        let count = refcount::sub(unsafe { &(*ptr).ref_count });
 
         if count == 0 {
             core::sync::atomic::fence(Ordering::Acquire);
-            let ptr = wrapper as *const Self as *mut Self;
-            let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
+            let alloc = unsafe { core::ptr::read(core::ptr::addr_of!((*ptr).alloc)) };
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
-                core::ptr::drop_in_place(&mut (*ptr).inner);
+                core::ptr::drop_in_place(core::ptr::addr_of_mut!((*ptr).inner));
                 let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
                 if resurrected != 0 {
                     resurrection_violation();
@@ -594,7 +594,7 @@ where
             return STATUS_SUCCESS;
         }
 
-        let primary = wrapper as *const _ as *mut c_void;
+        let primary = unsafe { Self::non_delegating_parent_ptr(this) as *mut c_void };
         if let Some(ptr) = <T as ComImpl<P>>::query_interface(&wrapper.inner, primary, riid) {
             let vtbl = unsafe { *(ptr as *mut *mut IUnknownVtbl) };
             unsafe { ((*vtbl).AddRef)(ptr) };
@@ -612,6 +612,14 @@ where
     unsafe fn from_non_delegating<'a>(ptr: *mut c_void) -> &'a Self {
         let unknown = unsafe { &*(ptr as *const NonDelegatingIUnknownN<T, P, S, A>) };
         unsafe { &*unknown.parent }
+    }
+
+    #[inline(always)]
+    /// # Safety
+    /// `ptr` must be a valid pointer to a non-delegating IUnknown created by this crate.
+    unsafe fn non_delegating_parent_ptr(ptr: *mut c_void) -> *mut Self {
+        let unknown = ptr as *mut NonDelegatingIUnknownN<T, P, S, A>;
+        unsafe { (*unknown).parent }
     }
 }
 
@@ -789,6 +797,14 @@ where
         unsafe { &*unknown.parent }
     }
 
+    #[inline(always)]
+    /// # Safety
+    /// `ptr` must be a valid pointer to a non-delegating IUnknown created by this crate.
+    unsafe fn non_delegating_parent_ptr(ptr: *mut c_void) -> *mut Self {
+        let unknown = ptr as *mut NonDelegatingIUnknown<T, I, A>;
+        unsafe { (*unknown).parent }
+    }
+
     #[allow(non_snake_case)]
     /// # Safety
     /// `this` must be a valid COM pointer created by `ComObject` for `T`.
@@ -868,16 +884,15 @@ where
     /// # Safety
     /// `this` must be a valid non-delegating IUnknown pointer created by `ComObject` for `T`.
     pub unsafe extern "system" fn shim_non_delegating_release(this: *mut c_void) -> u32 {
-        let wrapper = unsafe { Self::from_non_delegating(this) };
-        let count = refcount::sub(&wrapper.ref_count);
+        let ptr = unsafe { Self::non_delegating_parent_ptr(this) };
+        let count = refcount::sub(unsafe { &(*ptr).ref_count });
 
         if count == 0 {
             core::sync::atomic::fence(Ordering::Acquire);
-            let ptr = wrapper as *const Self as *mut Self;
-            let alloc = unsafe { core::ptr::read(&(*ptr).alloc) };
+            let alloc = unsafe { core::ptr::read(core::ptr::addr_of!((*ptr).alloc)) };
             let alloc = ManuallyDrop::into_inner(alloc);
             unsafe {
-                core::ptr::drop_in_place(&mut (*ptr).inner);
+                core::ptr::drop_in_place(core::ptr::addr_of_mut!((*ptr).inner));
                 let resurrected = (*ptr).ref_count.load(Ordering::Acquire);
                 if resurrected != 0 {
                     resurrection_violation();
