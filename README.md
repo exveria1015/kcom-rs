@@ -244,7 +244,8 @@ unknown, while the non-delegating pointer manages the inner refcount directly.
 use kcom::{ComObject, IUnknownVtbl};
 
 // SAFETY: outer_unknown must be a valid IUnknown vtable from the outer object.
-let non_delegating = ComObject::<Inner, IUnknownVtbl>::new_aggregated(inner, outer_unknown);
+let non_delegating =
+    unsafe { ComObject::<Inner, IUnknownVtbl>::new_aggregated(inner, outer_unknown) };
 ```
 
 ## Unicode helpers (kernel)

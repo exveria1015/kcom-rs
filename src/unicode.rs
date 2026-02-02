@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Exveria
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use alloc::string::{FromUtf16Error, String};
+use alloc::string::String;
 use core::alloc::Layout;
 use core::fmt;
 use core::mem::ManuallyDrop;
@@ -14,6 +14,7 @@ use crate::ntddk::UNICODE_STRING;
 pub enum UnicodeStringError {
     TooLong,
     AllocationFailed,
+    InvalidUtf16,
 }
 
 impl fmt::Display for UnicodeStringError {
@@ -21,6 +22,7 @@ impl fmt::Display for UnicodeStringError {
         match self {
             Self::TooLong => f.write_str("UNICODE_STRING exceeds u16 length"),
             Self::AllocationFailed => f.write_str("UNICODE_STRING allocation failed"),
+            Self::InvalidUtf16 => f.write_str("UNICODE_STRING contains invalid UTF-16"),
         }
     }
 }
@@ -67,6 +69,24 @@ pub struct OwnedUnicodeString<A: Allocator + Send + Sync = GlobalAllocator> {
 pub struct LocalUnicodeString<const N: usize> {
     buffer: [u16; N],
     len: usize,
+}
+
+/// A borrowed UNICODE_STRING view tied to a backing UTF-16 buffer lifetime.
+pub struct UnicodeStringRef<'a> {
+    inner: UNICODE_STRING,
+    _marker: core::marker::PhantomData<&'a [u16]>,
+}
+
+impl<'a> UnicodeStringRef<'a> {
+    #[inline]
+    pub fn as_ref(&self) -> &UNICODE_STRING {
+        &self.inner
+    }
+
+    #[inline]
+    pub fn as_ptr(&self) -> *const UNICODE_STRING {
+        &self.inner
+    }
 }
 
 impl<A: Allocator + Send + Sync> OwnedUnicodeString<A> {
@@ -175,6 +195,9 @@ impl<const N: usize> LocalUnicodeString<N> {
         self.len == 0
     }
 
+    /// Returns a UNICODE_STRING value that borrows the internal buffer.
+    ///
+    /// The returned value must not be stored beyond the lifetime of `self`.
     #[inline]
     pub fn as_unicode(&self) -> UNICODE_STRING {
         let max_units = (u16::MAX as usize) / 2;
@@ -183,6 +206,15 @@ impl<const N: usize> LocalUnicodeString<N> {
             Length: (self.len * 2) as u16,
             MaximumLength: (cap_units * 2) as u16,
             Buffer: self.buffer.as_ptr() as *mut u16,
+        }
+    }
+
+    /// Returns a UNICODE_STRING view tied to this value's lifetime.
+    #[inline]
+    pub fn as_unicode_ref(&self) -> UnicodeStringRef<'_> {
+        UnicodeStringRef {
+            inner: self.as_unicode(),
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -234,13 +266,28 @@ pub unsafe fn unicode_string_as_slice(unicode: &UNICODE_STRING) -> &[u16] {
     unsafe { slice::from_raw_parts(unicode.Buffer, len) }
 }
 
-/// Converts a UNICODE_STRING into an owned Rust String.
+/// Converts a UNICODE_STRING into an owned Rust String without panicking on OOM.
 ///
 /// # Safety
 /// Caller must ensure the UNICODE_STRING buffer is valid for reads.
-pub unsafe fn unicode_string_to_string(unicode: &UNICODE_STRING) -> Result<String, FromUtf16Error> {
+pub unsafe fn unicode_string_to_string(
+    unicode: &UNICODE_STRING,
+) -> Result<String, UnicodeStringError> {
     let slice = unsafe { unicode_string_as_slice(unicode) };
-    String::from_utf16(slice)
+    let reserve = slice
+        .len()
+        .checked_mul(3)
+        .ok_or(UnicodeStringError::TooLong)?;
+    let mut out = String::new();
+    out.try_reserve(reserve)
+        .map_err(|_| UnicodeStringError::AllocationFailed)?;
+    for unit in core::char::decode_utf16(slice.iter().copied()) {
+        match unit {
+            Ok(ch) => out.push(ch),
+            Err(_) => return Err(UnicodeStringError::InvalidUtf16),
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

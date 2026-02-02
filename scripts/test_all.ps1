@@ -10,12 +10,12 @@ function Run-Test {
     Write-Host ""
     Write-Host "==> $Name ($Package)"
     if ($Args.Count -gt 0) {
-        Write-Host "cargo test -p $Package $($Args -join ' ')"
+        Write-Host " cargo +nightly miri test -p $Package $($Args -join ' ')"
     } else {
-        Write-Host "cargo test -p $Package"
+        Write-Host " cargo +nightly miri test -p $Package"
     }
 
-    & cargo test -p $Package @Args
+    & cargo +nightly miri test -p $Package @Args
 }
 
 function Run-TestPair {

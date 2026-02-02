@@ -728,17 +728,17 @@ where
     /// # Safety
     /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
     #[inline]
-    pub fn new_aggregated_in(
+    pub unsafe fn new_aggregated_in(
         inner: T,
         outer_unknown: *mut c_void,
         alloc: A,
     ) -> Result<*mut c_void, NTSTATUS> {
-        Self::try_new_aggregated_in(inner, outer_unknown, alloc)
+        unsafe { Self::try_new_aggregated_in(inner, outer_unknown, alloc) }
             .ok_or(STATUS_INSUFFICIENT_RESOURCES)
     }
 
     #[inline]
-    pub fn try_new_aggregated_in(
+    pub unsafe fn try_new_aggregated_in(
         inner: T,
         outer_unknown: *mut c_void,
         alloc: A,
@@ -978,18 +978,21 @@ where
     /// # Safety
     /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
     #[inline]
-    pub fn new_aggregated(inner: T, outer_unknown: *mut c_void) -> Result<*mut c_void, NTSTATUS> {
-        Self::new_aggregated_in(inner, outer_unknown, GlobalAllocator)
+    pub unsafe fn new_aggregated(
+        inner: T,
+        outer_unknown: *mut c_void,
+    ) -> Result<*mut c_void, NTSTATUS> {
+        unsafe { Self::new_aggregated_in(inner, outer_unknown, GlobalAllocator) }
     }
 
     /// # Safety
     /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
     #[inline]
-    pub fn try_new_aggregated(
+    pub unsafe fn try_new_aggregated(
         inner: T,
         outer_unknown: *mut c_void,
     ) -> Option<*mut c_void> {
-        Self::try_new_aggregated_in(inner, outer_unknown, GlobalAllocator)
+        unsafe { Self::try_new_aggregated_in(inner, outer_unknown, GlobalAllocator) }
     }
 }
 
@@ -1098,10 +1101,12 @@ mod tests {
         let outer = OuterUnknown {
             lpVtbl: &OUTER_VTBL as *const _,
         };
-        let ptr = ComObject::<Dummy, IUnknownVtbl>::new_aggregated(
-            Dummy,
-            &outer as *const _ as *mut core::ffi::c_void,
-        )
+        let ptr = unsafe {
+            ComObject::<Dummy, IUnknownVtbl>::new_aggregated(
+                Dummy,
+                &outer as *const _ as *mut core::ffi::c_void,
+            )
+        }
         .unwrap();
 
         unsafe {

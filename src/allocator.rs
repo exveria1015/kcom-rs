@@ -267,6 +267,10 @@ pub fn init_box_with_tag<'a, T, E>(
 
 pub struct GlobalAllocator;
 
+#[cfg(feature = "driver")]
+const GLOBAL_POOL_TAG: u32 = u32::from_ne_bytes(*b"KCOM");
+
+#[cfg(not(feature = "driver"))]
 impl Allocator for GlobalAllocator {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -276,6 +280,24 @@ impl Allocator for GlobalAllocator {
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         alloc::alloc::dealloc(ptr, layout)
+    }
+}
+
+#[cfg(feature = "driver")]
+impl Allocator for GlobalAllocator {
+    #[inline]
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        WdkAllocator::new(PoolType::NonPagedNx, GLOBAL_POOL_TAG).alloc(layout)
+    }
+
+    #[inline]
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        WdkAllocator::new(PoolType::NonPagedNx, GLOBAL_POOL_TAG).alloc_zeroed(layout)
+    }
+
+    #[inline]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        WdkAllocator::new(PoolType::NonPagedNx, GLOBAL_POOL_TAG).dealloc(ptr, layout)
     }
 }
 

@@ -64,10 +64,12 @@ fn aggregated_outer_unknown_delegates_iunknown_calls() {
     };
     OUTER_PTR.store(&outer as *const _ as usize, Ordering::Relaxed);
 
-    let non_delegating = ComObject::<Dummy, IUnknownVtbl>::new_aggregated(
-        Dummy,
-        &outer as *const _ as *mut c_void,
-    )
+    let non_delegating = unsafe {
+        ComObject::<Dummy, IUnknownVtbl>::new_aggregated(
+            Dummy,
+            &outer as *const _ as *mut c_void,
+        )
+    }
     .unwrap();
 
     let delegating =

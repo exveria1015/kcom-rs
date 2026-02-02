@@ -182,17 +182,19 @@ macro_rules! impl_com_object {
             /// # Safety
             /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
             #[inline]
-            pub fn new_com_aggregated(
+            pub unsafe fn new_com_aggregated(
                 inner: Self,
                 outer_unknown: *mut core::ffi::c_void,
             ) -> Result<*mut core::ffi::c_void, $crate::NTSTATUS> {
-                $crate::wrapper::ComObject::<Self, $vtable>::new_aggregated(inner, outer_unknown)
+                unsafe {
+                    $crate::wrapper::ComObject::<Self, $vtable>::new_aggregated(inner, outer_unknown)
+                }
             }
 
             /// # Safety
             /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
             #[inline]
-            pub fn new_com_aggregated_in<A>(
+            pub unsafe fn new_com_aggregated_in<A>(
                 inner: Self,
                 outer_unknown: *mut core::ffi::c_void,
                 alloc: A,
@@ -200,30 +202,34 @@ macro_rules! impl_com_object {
             where
                 A: $crate::allocator::Allocator + Send + Sync,
             {
-                $crate::wrapper::ComObject::<Self, $vtable, A>::new_aggregated_in(
-                    inner,
-                    outer_unknown,
-                    alloc,
-                )
+                unsafe {
+                    $crate::wrapper::ComObject::<Self, $vtable, A>::new_aggregated_in(
+                        inner,
+                        outer_unknown,
+                        alloc,
+                    )
+                }
             }
 
             /// # Safety
             /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
             #[inline]
-            pub fn try_new_com_aggregated(
+            pub unsafe fn try_new_com_aggregated(
                 inner: Self,
                 outer_unknown: *mut core::ffi::c_void,
             ) -> Option<*mut core::ffi::c_void> {
-                $crate::wrapper::ComObject::<Self, $vtable>::try_new_aggregated(
-                    inner,
-                    outer_unknown,
-                )
+                unsafe {
+                    $crate::wrapper::ComObject::<Self, $vtable>::try_new_aggregated(
+                        inner,
+                        outer_unknown,
+                    )
+                }
             }
 
             /// # Safety
             /// `outer_unknown` must point to a valid outer IUnknown interface pointer.
             #[inline]
-            pub fn try_new_com_aggregated_in<A>(
+            pub unsafe fn try_new_com_aggregated_in<A>(
                 inner: Self,
                 outer_unknown: *mut core::ffi::c_void,
                 alloc: A,
@@ -231,11 +237,13 @@ macro_rules! impl_com_object {
             where
                 A: $crate::allocator::Allocator + Send + Sync,
             {
-                $crate::wrapper::ComObject::<Self, $vtable, A>::try_new_aggregated_in(
-                    inner,
-                    outer_unknown,
-                    alloc,
-                )
+                unsafe {
+                    $crate::wrapper::ComObject::<Self, $vtable, A>::try_new_aggregated_in(
+                        inner,
+                        outer_unknown,
+                        alloc,
+                    )
+                }
             }
         }
     };
