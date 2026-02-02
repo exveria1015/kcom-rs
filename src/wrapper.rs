@@ -49,6 +49,17 @@ fn resurrection_violation() -> ! {
             core::hint::spin_loop();
         }
     }
+
+    #[cfg(all(
+        feature = "driver",
+        any(feature = "async-com-kernel", feature = "kernel-unicode"),
+        miri
+    ))]
+    {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
 }
 
 #[inline]

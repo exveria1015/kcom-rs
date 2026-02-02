@@ -315,7 +315,7 @@ pub struct WdkAllocator {
     pub tag: u32,
 }
 
-#[cfg(feature = "driver")]
+#[cfg(all(feature = "driver", not(miri)))]
 const WDK_ALLOC_ALIGNMENT: usize = if cfg!(target_pointer_width = "64") { 16 } else { 8 };
 
 #[cfg(feature = "driver")]
@@ -324,7 +324,10 @@ impl WdkAllocator {
     pub const fn new(pool: PoolType, tag: u32) -> Self {
         Self { pool, tag }
     }
+}
 
+#[cfg(all(feature = "driver", not(miri)))]
+impl WdkAllocator {
     /// Allocate memory without zeroing. Caller must fully initialize the buffer.
     #[inline]
     pub unsafe fn alloc_uninitialized(&self, layout: Layout) -> *mut u8 {
@@ -337,6 +340,15 @@ impl WdkAllocator {
 
         let ptr = unsafe { ex_allocate_pool_uninitialized(self.pool, layout.size(), self.tag) };
         ptr as *mut u8
+    }
+}
+
+#[cfg(all(feature = "driver", miri))]
+impl WdkAllocator {
+    /// Miri stub: use the global allocator.
+    #[inline]
+    pub unsafe fn alloc_uninitialized(&self, layout: Layout) -> *mut u8 {
+        GlobalAllocator.alloc(layout)
     }
 }
 
