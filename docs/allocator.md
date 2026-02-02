@@ -45,6 +45,8 @@ Alignment:
 - Default path enforces kernel alignment (16 bytes on x64).
 - `wdk-alloc-align` enables over-aligned allocations with padding and a small
   header. The default fast path is unchanged.
+- Debug builds with `wdk-alloc-align` use the header for all allocations and
+  validate the recorded alignment on `dealloc` to catch mismatched layouts.
 
 Zeroing:
 

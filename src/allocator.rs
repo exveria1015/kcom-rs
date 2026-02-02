@@ -318,8 +318,37 @@ pub struct WdkAllocator {
 #[cfg(all(feature = "driver", not(miri)))]
 const WDK_ALLOC_ALIGNMENT: usize = if cfg!(target_pointer_width = "64") { 16 } else { 8 };
 
-#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", debug_assertions))]
+const WDK_ALLOC_MAGIC: usize = 0x4b43_4f4d;
+
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", debug_assertions))]
+#[repr(C)]
+struct WdkAllocHeader {
+    magic: usize,
+    base: usize,
+    align: usize,
+}
+
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", debug_assertions))]
+const WDK_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<WdkAllocHeader>();
+
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", not(debug_assertions)))]
 const WDK_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<usize>();
+
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
+#[inline]
+fn needs_overaligned(layout: Layout) -> bool {
+    #[cfg(debug_assertions)]
+    {
+        let _ = layout;
+        true
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        layout.align() > WDK_ALLOC_ALIGNMENT
+    }
+}
 
 #[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
 #[inline]
@@ -361,8 +390,18 @@ unsafe fn alloc_overaligned(
         }
     };
 
-    let header_ptr = (aligned - WDK_ALLOC_HEADER_SIZE) as *mut usize;
-    unsafe { header_ptr.write(base as usize) };
+    let header_ptr = (aligned - WDK_ALLOC_HEADER_SIZE) as *mut u8;
+    #[cfg(debug_assertions)]
+    unsafe {
+        let header = header_ptr as *mut WdkAllocHeader;
+        (*header).magic = WDK_ALLOC_MAGIC;
+        (*header).base = base as usize;
+        (*header).align = align;
+    }
+    #[cfg(not(debug_assertions))]
+    unsafe {
+        (header_ptr as *mut usize).write(base as usize);
+    }
 
     let user_ptr = aligned as *mut u8;
     if zeroed {
@@ -371,7 +410,23 @@ unsafe fn alloc_overaligned(
     user_ptr
 }
 
-#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align", debug_assertions))]
+#[inline]
+unsafe fn dealloc_overaligned(ptr: *mut u8, tag: u32, layout: Layout) {
+    let header_ptr = (ptr as usize - WDK_ALLOC_HEADER_SIZE) as *const WdkAllocHeader;
+    let header = unsafe { &*header_ptr };
+    debug_assert_eq!(header.magic, WDK_ALLOC_MAGIC);
+    debug_assert_eq!(header.align, layout.align());
+    let base = header.base as *mut u8;
+    unsafe { ExFreePoolWithTag(base as _, tag) };
+}
+
+#[cfg(all(
+    feature = "driver",
+    not(miri),
+    feature = "wdk-alloc-align",
+    not(debug_assertions)
+))]
 #[inline]
 unsafe fn dealloc_overaligned(ptr: *mut u8, tag: u32) {
     let header_ptr = (ptr as usize - WDK_ALLOC_HEADER_SIZE) as *mut usize;
@@ -395,13 +450,17 @@ impl WdkAllocator {
         if layout.size() == 0 {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
-        if layout.align() > WDK_ALLOC_ALIGNMENT {
-            #[cfg(feature = "wdk-alloc-align")]
-            {
+
+        #[cfg(feature = "wdk-alloc-align")]
+        {
+            if needs_overaligned(layout) {
                 return unsafe { alloc_overaligned(self.pool, self.tag, layout, false) };
             }
-            #[cfg(not(feature = "wdk-alloc-align"))]
-            {
+        }
+
+        #[cfg(not(feature = "wdk-alloc-align"))]
+        {
+            if layout.align() > WDK_ALLOC_ALIGNMENT {
                 return core::ptr::null_mut();
             }
         }
@@ -427,13 +486,17 @@ impl Allocator for WdkAllocator {
         if layout.size() == 0 {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
-        if layout.align() > WDK_ALLOC_ALIGNMENT {
-            #[cfg(feature = "wdk-alloc-align")]
-            {
+
+        #[cfg(feature = "wdk-alloc-align")]
+        {
+            if needs_overaligned(layout) {
                 return unsafe { alloc_overaligned(self.pool, self.tag, layout, false) };
             }
-            #[cfg(not(feature = "wdk-alloc-align"))]
-            {
+        }
+
+        #[cfg(not(feature = "wdk-alloc-align"))]
+        {
+            if layout.align() > WDK_ALLOC_ALIGNMENT {
                 return core::ptr::null_mut();
             }
         }
@@ -447,13 +510,17 @@ impl Allocator for WdkAllocator {
         if layout.size() == 0 {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
-        if layout.align() > WDK_ALLOC_ALIGNMENT {
-            #[cfg(feature = "wdk-alloc-align")]
-            {
+
+        #[cfg(feature = "wdk-alloc-align")]
+        {
+            if needs_overaligned(layout) {
                 return unsafe { alloc_overaligned(self.pool, self.tag, layout, true) };
             }
-            #[cfg(not(feature = "wdk-alloc-align"))]
-            {
+        }
+
+        #[cfg(not(feature = "wdk-alloc-align"))]
+        {
+            if layout.align() > WDK_ALLOC_ALIGNMENT {
                 return core::ptr::null_mut();
             }
         }
@@ -467,9 +534,16 @@ impl Allocator for WdkAllocator {
         if layout.size() == 0 {
             return;
         }
-        if layout.align() > WDK_ALLOC_ALIGNMENT {
-            #[cfg(feature = "wdk-alloc-align")]
-            {
+
+        #[cfg(all(feature = "wdk-alloc-align", debug_assertions))]
+        {
+            unsafe { dealloc_overaligned(ptr, self.tag, layout) };
+            return;
+        }
+
+        #[cfg(all(feature = "wdk-alloc-align", not(debug_assertions)))]
+        {
+            if layout.align() > WDK_ALLOC_ALIGNMENT {
                 unsafe { dealloc_overaligned(ptr, self.tag) };
                 return;
             }

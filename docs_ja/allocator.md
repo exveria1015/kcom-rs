@@ -43,6 +43,8 @@ pub trait Allocator {
 
 - 既定はカーネル標準の 16 バイト（x64）
 - `wdk-alloc-align` で over-aligned を許可（ヘッダ + パディング）
+- `wdk-alloc-align` の debug ビルドでは全割り当てにヘッダを付与し、
+  `dealloc` 時に記録されたアライメントを検証して不整合を検出
 
 ゼロ初期化:
 
