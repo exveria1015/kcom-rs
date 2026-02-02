@@ -17,6 +17,10 @@ Notes:
 
 - The trait mirrors `GlobalAlloc` but is object-safe and easy to pass around.
 - `alloc_zeroed` uses `alloc` + `write_bytes` unless overridden.
+- `ComObject`/`KBox` store the allocator inside the allocation and move it out
+  with `ptr::read` before freeing. Allocators must be safe to move by bitcopy
+  and must not borrow from the allocation being freed (prefer small handle or
+  `Copy`-like types).
 
 ## GlobalAllocator
 
