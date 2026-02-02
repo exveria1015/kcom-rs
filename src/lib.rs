@@ -32,8 +32,8 @@ pub mod traits;
 pub mod wrapper;
 
 pub use iunknown::{
-    GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, PendingResult, STATUS_NOINTERFACE, STATUS_SUCCESS,
-    Status, StatusResult,
+    GUID, IUnknownVtbl, IID_IUNKNOWN, NTSTATUS, PendingResult, STATUS_INVALID_PARAMETER,
+    STATUS_NOINTERFACE, STATUS_SUCCESS, Status, StatusResult,
 };
 pub use paste;
 #[cfg(feature = "async-impl")]

@@ -13,7 +13,7 @@ use core::cell::{Cell, RefCell};
 #[cfg(any(not(feature = "driver"), miri))]
 use crate::alloc::boxed::Box;
 
-use crate::iunknown::{NTSTATUS, STATUS_NOT_SUPPORTED};
+use crate::iunknown::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_NOT_SUPPORTED};
 #[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use crate::iunknown::STATUS_SUCCESS;
 
@@ -1158,7 +1158,7 @@ where
         if device.is_null() {
             unsafe { &*ptr.as_ptr() }.scheduled.store(0, Ordering::Release);
             unsafe { tracker_complete(tracker) };
-            return STATUS_NOT_SUPPORTED;
+            return STATUS_INVALID_PARAMETER;
         }
 
         let work_item = unsafe { IoAllocateWorkItem(device) };
@@ -1315,6 +1315,9 @@ pub fn spawn_task<F>(device: *mut DEVICE_OBJECT, future: F) -> NTSTATUS
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
+    if device.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
     let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return s,
@@ -1343,6 +1346,9 @@ pub fn spawn_task_tracked<F>(
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
+    if device.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
     let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return s,
@@ -1372,6 +1378,9 @@ pub fn spawn_task_cancellable<F>(
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
+    if device.is_null() {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
     let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return Err(s),
@@ -1434,6 +1443,9 @@ pub fn spawn_task_cancellable_tracked<F>(
 where
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
+    if device.is_null() {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
     let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return Err(s),

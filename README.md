@@ -95,6 +95,7 @@ let tracker = WorkItemTracker::new();
 let _ = kcom::spawn_task_tracked(device, &tracker, async {
     kcom::STATUS_SUCCESS
 });
+// Note: device must be non-null; null returns STATUS_INVALID_PARAMETER.
 // ... during unload
 tracker.drain();
 ```
@@ -105,6 +106,10 @@ When using `WdkAllocator` (feature `driver`), call `init_ex_allocate_pool2()` on
 PASSIVE_LEVEL (e.g. `DriverEntry`). Allocation paths will attempt a best-effort lazy
 initialization, but that can occur at elevated IRQL, so explicit initialization is strongly
 recommended to ensure `ExAllocatePool2` is used safely on Windows 10 2004+.
+
+By default, `WdkAllocator` enforces the kernel pool alignment (16 bytes on x64). If you need
+over-aligned allocations (e.g. `#[repr(align(32))]`), enable the `wdk-alloc-align` feature.
+This adds padding and a small header only for over-aligned layouts; the default path is unchanged.
 
 ## Usage (sync interface)
 

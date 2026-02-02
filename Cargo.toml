@@ -31,6 +31,7 @@ driver = ["wdk-sys"]
 driver-test-stub = ["driver"]
 refcount-hardening = []
 strict-provenance = []
+wdk-alloc-align = ["driver"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(driver_model__driver_type, values("WDM", "KMDF"))'] }

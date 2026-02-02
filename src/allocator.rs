@@ -318,6 +318,67 @@ pub struct WdkAllocator {
 #[cfg(all(feature = "driver", not(miri)))]
 const WDK_ALLOC_ALIGNMENT: usize = if cfg!(target_pointer_width = "64") { 16 } else { 8 };
 
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
+const WDK_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<usize>();
+
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
+#[inline]
+unsafe fn alloc_overaligned(
+    pool: PoolType,
+    tag: u32,
+    layout: Layout,
+    zeroed: bool,
+) -> *mut u8 {
+    let size = layout.size();
+    let align = layout.align();
+
+    let total = match size
+        .checked_add(align)
+        .and_then(|v| v.checked_add(WDK_ALLOC_HEADER_SIZE))
+    {
+        Some(total) => total,
+        None => return core::ptr::null_mut(),
+    };
+
+    let base = unsafe { ex_allocate_pool_uninitialized(pool, total, tag) } as *mut u8;
+    if base.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let start = match (base as usize).checked_add(WDK_ALLOC_HEADER_SIZE) {
+        Some(value) => value,
+        None => {
+            unsafe { ExFreePoolWithTag(base as _, tag) };
+            return core::ptr::null_mut();
+        }
+    };
+
+    let aligned = match start.checked_add(align - 1) {
+        Some(value) => value & !(align - 1),
+        None => {
+            unsafe { ExFreePoolWithTag(base as _, tag) };
+            return core::ptr::null_mut();
+        }
+    };
+
+    let header_ptr = (aligned - WDK_ALLOC_HEADER_SIZE) as *mut usize;
+    unsafe { header_ptr.write(base as usize) };
+
+    let user_ptr = aligned as *mut u8;
+    if zeroed {
+        unsafe { ptr::write_bytes(user_ptr, 0, size) };
+    }
+    user_ptr
+}
+
+#[cfg(all(feature = "driver", not(miri), feature = "wdk-alloc-align"))]
+#[inline]
+unsafe fn dealloc_overaligned(ptr: *mut u8, tag: u32) {
+    let header_ptr = (ptr as usize - WDK_ALLOC_HEADER_SIZE) as *mut usize;
+    let base = unsafe { header_ptr.read() } as *mut u8;
+    unsafe { ExFreePoolWithTag(base as _, tag) };
+}
+
 #[cfg(feature = "driver")]
 impl WdkAllocator {
     #[inline]
@@ -335,7 +396,14 @@ impl WdkAllocator {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
         if layout.align() > WDK_ALLOC_ALIGNMENT {
-            return core::ptr::null_mut();
+            #[cfg(feature = "wdk-alloc-align")]
+            {
+                return unsafe { alloc_overaligned(self.pool, self.tag, layout, false) };
+            }
+            #[cfg(not(feature = "wdk-alloc-align"))]
+            {
+                return core::ptr::null_mut();
+            }
         }
 
         let ptr = unsafe { ex_allocate_pool_uninitialized(self.pool, layout.size(), self.tag) };
@@ -360,7 +428,14 @@ impl Allocator for WdkAllocator {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
         if layout.align() > WDK_ALLOC_ALIGNMENT {
-            return core::ptr::null_mut();
+            #[cfg(feature = "wdk-alloc-align")]
+            {
+                return unsafe { alloc_overaligned(self.pool, self.tag, layout, false) };
+            }
+            #[cfg(not(feature = "wdk-alloc-align"))]
+            {
+                return core::ptr::null_mut();
+            }
         }
 
         let ptr = unsafe { ex_allocate_pool_uninitialized(self.pool, layout.size(), self.tag) };
@@ -373,7 +448,14 @@ impl Allocator for WdkAllocator {
             return core::ptr::NonNull::<u8>::dangling().as_ptr();
         }
         if layout.align() > WDK_ALLOC_ALIGNMENT {
-            return core::ptr::null_mut();
+            #[cfg(feature = "wdk-alloc-align")]
+            {
+                return unsafe { alloc_overaligned(self.pool, self.tag, layout, true) };
+            }
+            #[cfg(not(feature = "wdk-alloc-align"))]
+            {
+                return core::ptr::null_mut();
+            }
         }
 
         let ptr = unsafe { ex_allocate_pool(self.pool, layout.size(), self.tag) };
@@ -384,6 +466,13 @@ impl Allocator for WdkAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if layout.size() == 0 {
             return;
+        }
+        if layout.align() > WDK_ALLOC_ALIGNMENT {
+            #[cfg(feature = "wdk-alloc-align")]
+            {
+                unsafe { dealloc_overaligned(ptr, self.tag) };
+                return;
+            }
         }
         unsafe { ExFreePoolWithTag(ptr as _, self.tag) }
     }
