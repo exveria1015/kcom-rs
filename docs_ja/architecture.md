@@ -84,7 +84,7 @@ Aggregation では non-delegating IUnknown (NDI) を内包します。
 `async_com` は Executor を通じて駆動されます。
 
 - DPC Executor（DISPATCH_LEVEL）
-- Work-item Executor（PASSIVE_LEVEL, WDM）
+- Work-item Executor（PASSIVE_LEVEL, WDM/KMDF）
 - `CancelHandle` / `WorkItemCancelHandle`
 - `TaskTracker` / `WorkItemTracker`
 

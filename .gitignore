@@ -3,4 +3,4 @@
 Cargo.lock
 benches/bin
 /.*
-/contexts
+contexts/*

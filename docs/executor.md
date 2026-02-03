@@ -3,7 +3,7 @@
 The executor module provides two execution models for async work:
 
 - DPC-based executor (DISPATCH_LEVEL)
-- Work-item executor (PASSIVE_LEVEL, WDM only)
+- Work-item executor (PASSIVE_LEVEL, WDM/KMDF)
 
 Host/Miri builds use stubs that poll once to keep tests deterministic.
 
@@ -47,22 +47,32 @@ CPU indexing:
 - If an index is out of range, debug builds emit a trace and cancellation
   tracking is disabled for that CPU.
 
-## Work-item executor (WDM)
+## Work-item executor (WDM/KMDF)
 
-Available with `driver + async-com-kernel + driver_model__driver_type=WDM`.
+Available with `driver + async-com-kernel` and either
+`driver_model__driver_type=WDM` or `driver_model__driver_type=KMDF`.
 
 APIs:
 
-- `spawn_task` / `spawn_task_tracked`
-- `spawn_task_cancellable` / `spawn_task_cancellable_tracked`
-- `WorkItemTracker`, `WorkItemCancelHandle`
+- `spawn_task`
+- `spawn_task_cancellable`
+- `WorkItemCancelHandle`
+- `TaskContext` / `DefaultTaskContext`
+- `spawn_task_tracked` (WDM only)
+- `spawn_task_cancellable_tracked` (WDM only)
+- `WorkItemTracker` (WDM only)
+
+`TaskContext` is unsafe to implement. Prefer the built-in WDM/KMDF contexts
+unless you are integrating a custom backend.
 
 Behavior:
 
 - Work items execute at PASSIVE_LEVEL.
-- `device` must be non-null; null is rejected with `STATUS_INVALID_PARAMETER`.
+- `context` must be non-null; null is rejected with `STATUS_INVALID_PARAMETER`.
+  - WDM: pass `*mut DEVICE_OBJECT`.
+  - KMDF: pass `WDFDEVICE`.
 - `WorkItemTracker::drain` should be used during driver unload to ensure all
-  work is complete before freeing device objects.
+  work is complete before freeing device objects (WDM only).
 
 ## Host/Miri stubs
 
@@ -73,4 +83,3 @@ In non-driver or Miri builds, the executor:
 
 This is sufficient for tests that complete immediately or check partial state.
 It does not provide full async scheduling.
-

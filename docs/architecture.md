@@ -92,7 +92,7 @@ Aggregation uses a non-delegating IUnknown (NDI) stored within the object:
 `async_com` uses the executor layer for driving futures:
 
 - DPC executor for DISPATCH_LEVEL (unsafe API)
-- Work-item executor for PASSIVE_LEVEL (WDM)
+- Work-item executor for PASSIVE_LEVEL (WDM/KMDF)
 - `CancelHandle` / `WorkItemCancelHandle` to request cancellation
 - `TaskTracker` / `WorkItemTracker` to drain work before unload
 
@@ -121,4 +121,3 @@ is group-aware; out-of-range indexes are debug-traced and treated as missing.
 
 `trace` exposes a hook that can be connected to DbgPrint/WPP/ETW for debug
 telemetry. The `ensure!` macro emits file/line context when enabled.
-

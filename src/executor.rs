@@ -4,17 +4,21 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use core::future::Future;
-#[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
+#[cfg(any(
+    feature = "async-com-kernel",
+    not(all(feature = "driver", feature = "async-com-kernel")),
+    miri
+))]
 use core::pin::Pin;
 #[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use core::task::{Context, Poll};
-#[cfg(any(not(feature = "driver"), miri))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 use core::cell::{Cell, RefCell};
-#[cfg(any(not(feature = "driver"), miri))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 use crate::alloc::boxed::Box;
 
 use crate::iunknown::{NTSTATUS, STATUS_NOT_SUPPORTED};
-#[cfg(all(feature = "driver", not(miri)))]
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::iunknown::STATUS_INVALID_PARAMETER;
 #[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use crate::iunknown::STATUS_SUCCESS;
@@ -37,7 +41,14 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
 use crate::ntddk::{
     DEVICE_OBJECT, IoAllocateWorkItem, IoFreeWorkItem, IoQueueWorkItem, ObDereferenceObject,
-    ObReferenceObject, PIO_WORKITEM, PIO_WORKITEM_ROUTINE, WORK_QUEUE_TYPE,
+    ObReferenceObject, PIO_WORKITEM_ROUTINE, WORK_QUEUE_TYPE,
+};
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+use crate::ntddk::{
+    wdf_object_attributes_init, wdf_workitem_config_init, PFN_WDF_WORKITEM, WDFDEVICE, WDFOBJECT,
+    WDFWORKITEM, WDF_OBJECT_CONTEXT_TYPE_INFO, WdfObjectDelete, WdfObjectGetTypedContextWorker,
+    WdfWorkItemCreate, WdfWorkItemEnqueue,
 };
 
 #[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
@@ -944,8 +955,202 @@ impl Drop for KernelTimerFuture {
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-struct WorkItemTask<F>
+pub type TaskContextCallback = PIO_WORKITEM_ROUTINE;
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+pub type TaskContextCallback = PFN_WDF_WORKITEM;
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
+pub type DefaultTaskContext = *mut DEVICE_OBJECT;
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+pub type DefaultTaskContext = WDFDEVICE;
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+/// Backend hooks for the PASSIVE_LEVEL work-item executor (WDM/KMDF).
+///
+/// # Safety
+/// Implementations must be safe to share across work-item callbacks and retain
+/// a valid backend handle for the task lifetime.
+pub unsafe trait TaskContext: Copy + Default + 'static {
+    fn is_valid(self) -> bool;
+    unsafe fn retain(self);
+    unsafe fn release(self);
+    unsafe fn create_work_item(
+        self,
+        task_ptr: *mut c_void,
+        callback: TaskContextCallback,
+        out_item: &mut *mut c_void,
+    ) -> NTSTATUS;
+    unsafe fn enqueue_work_item(
+        item: *mut c_void,
+        task_ptr: *mut c_void,
+        callback: TaskContextCallback,
+    );
+    unsafe fn delete_work_item(item: *mut c_void);
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
+unsafe impl TaskContext for *mut DEVICE_OBJECT {
+    #[inline]
+    fn is_valid(self) -> bool {
+        !self.is_null()
+    }
+
+    #[inline]
+    unsafe fn retain(self) {
+        if !self.is_null() {
+            unsafe { ObReferenceObject(self.cast()) };
+        }
+    }
+
+    #[inline]
+    unsafe fn release(self) {
+        if !self.is_null() {
+            unsafe { ObDereferenceObject(self.cast()) };
+        }
+    }
+
+    unsafe fn create_work_item(
+        self,
+        _task_ptr: *mut c_void,
+        _callback: TaskContextCallback,
+        out_item: &mut *mut c_void,
+    ) -> NTSTATUS {
+        if self.is_null() {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        let work_item = unsafe { IoAllocateWorkItem(self) };
+        if work_item.is_null() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        *out_item = work_item.cast();
+        STATUS_SUCCESS
+    }
+
+    unsafe fn enqueue_work_item(
+        item: *mut c_void,
+        task_ptr: *mut c_void,
+        callback: TaskContextCallback,
+    ) {
+        if item.is_null() {
+            return;
+        }
+
+        unsafe {
+            IoQueueWorkItem(
+                item.cast(),
+                callback,
+                WORK_QUEUE_TYPE::DelayedWorkQueue,
+                task_ptr,
+            );
+        }
+    }
+
+    unsafe fn delete_work_item(item: *mut c_void) {
+        if !item.is_null() {
+            unsafe { IoFreeWorkItem(item.cast()) };
+        }
+    }
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+#[repr(C)]
+struct WorkItemTaskContext {
+    task_ptr: *mut c_void,
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+unsafe extern "C" fn work_item_context_type() -> *const WDF_OBJECT_CONTEXT_TYPE_INFO {
+    core::ptr::addr_of!(WORK_ITEM_CONTEXT_TYPE_INFO)
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+static mut WORK_ITEM_CONTEXT_TYPE_INFO: WDF_OBJECT_CONTEXT_TYPE_INFO = WDF_OBJECT_CONTEXT_TYPE_INFO {
+    Size: core::mem::size_of::<WDF_OBJECT_CONTEXT_TYPE_INFO>() as u32,
+    ContextName: core::ptr::null(),
+    ContextSize: core::mem::size_of::<WorkItemTaskContext>(),
+    UniqueType: core::ptr::addr_of!(WORK_ITEM_CONTEXT_TYPE_INFO),
+    EvtDriverGetUniqueContextType: Some(work_item_context_type),
+};
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+unsafe impl TaskContext for WDFDEVICE {
+    #[inline]
+    fn is_valid(self) -> bool {
+        !self.is_null()
+    }
+
+    #[inline]
+    unsafe fn retain(self) {}
+
+    #[inline]
+    unsafe fn release(self) {}
+
+    unsafe fn create_work_item(
+        self,
+        task_ptr: *mut c_void,
+        callback: TaskContextCallback,
+        out_item: &mut *mut c_void,
+    ) -> NTSTATUS {
+        if self.is_null() {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        let mut config = wdf_workitem_config_init(callback);
+        let context_info = core::ptr::addr_of!(WORK_ITEM_CONTEXT_TYPE_INFO);
+        let mut attrs = wdf_object_attributes_init(
+            self as WDFOBJECT,
+            core::mem::size_of::<WorkItemTaskContext>(),
+            context_info,
+        );
+
+        let mut work_item: WDFWORKITEM = core::ptr::null_mut();
+        let status = unsafe { WdfWorkItemCreate(&mut config, &mut attrs, &mut work_item) };
+        if status != STATUS_SUCCESS {
+            return status;
+        }
+
+        let ctx = unsafe {
+            WdfObjectGetTypedContextWorker(work_item as WDFOBJECT, context_info)
+        };
+        if ctx.is_null() {
+            unsafe { WdfObjectDelete(work_item as WDFOBJECT) };
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        unsafe {
+            (*(ctx as *mut WorkItemTaskContext)).task_ptr = task_ptr;
+        }
+        *out_item = work_item.cast();
+        STATUS_SUCCESS
+    }
+
+    unsafe fn enqueue_work_item(
+        item: *mut c_void,
+        _task_ptr: *mut c_void,
+        _callback: TaskContextCallback,
+    ) {
+        if item.is_null() {
+            return;
+        }
+
+        unsafe { WdfWorkItemEnqueue(item.cast()) };
+    }
+
+    unsafe fn delete_work_item(item: *mut c_void) {
+        if !item.is_null() {
+            unsafe { WdfObjectDelete(item.cast()) };
+        }
+    }
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+struct WorkItemTask<C, F>
 where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
     ref_count: AtomicU32,
@@ -953,24 +1158,25 @@ where
     completed: AtomicU32,
     cancel_requested: AtomicU32,
     future: ManuallyDrop<F>,
-    device: *mut DEVICE_OBJECT,
+    context: C,
     tracker: *const WorkItemTracker,
-    work_item: AtomicPtr<PIO_WORKITEM>,
+    work_item: AtomicPtr<c_void>,
 }
 
 /// Handle for requesting cancellation on a work-item task.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-pub struct WorkItemCancelHandle<F>
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub struct WorkItemCancelHandle<F, C = DefaultTaskContext>
 where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
-    task: AtomicPtr<WorkItemTask<F>>,
+    task: AtomicPtr<WorkItemTask<C, F>>,
 }
 
-#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 pub struct WorkItemCancelHandle<F>(core::marker::PhantomData<F>);
 
-#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM")), miri))]
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
 impl<F> WorkItemCancelHandle<F> {
     #[inline]
     pub fn cancel(&self) {}
@@ -981,19 +1187,30 @@ impl<F> WorkItemCancelHandle<F> {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-unsafe impl<F> Send for WorkItemCancelHandle<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-unsafe impl<F> Sync for WorkItemCancelHandle<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
-
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-impl<F> WorkItemCancelHandle<F>
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+unsafe impl<F, C> Send for WorkItemCancelHandle<F, C>
 where
+    C: TaskContext,
+    F: Future<Output = NTSTATUS> + Send + 'static,
+{
+}
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+unsafe impl<F, C> Sync for WorkItemCancelHandle<F, C>
+where
+    C: TaskContext,
+    F: Future<Output = NTSTATUS> + Send + 'static,
+{
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+impl<F, C> WorkItemCancelHandle<F, C>
+where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
     #[inline]
-    unsafe fn new(ptr: NonNull<WorkItemTask<F>>) -> Self {
-        unsafe { WorkItemTask::<F>::add_ref(ptr) };
+    unsafe fn new(ptr: NonNull<WorkItemTask<C, F>>) -> Self {
+        unsafe { WorkItemTask::<C, F>::add_ref(ptr) };
         Self {
             task: AtomicPtr::new(ptr.as_ptr()),
         }
@@ -1009,7 +1226,7 @@ where
             return;
         };
 
-        unsafe { WorkItemTask::<F>::cancel(ptr) };
+        unsafe { WorkItemTask::<C, F>::cancel(ptr) };
     }
 
     /// Check whether cancellation has been requested.
@@ -1024,15 +1241,16 @@ where
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-impl<F> Clone for WorkItemCancelHandle<F>
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+impl<F, C> Clone for WorkItemCancelHandle<F, C>
 where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
     fn clone(&self) -> Self {
         let ptr = self.task.load(Ordering::Acquire);
         if let Some(ptr) = NonNull::new(ptr) {
-            unsafe { WorkItemTask::<F>::add_ref(ptr) };
+            unsafe { WorkItemTask::<C, F>::add_ref(ptr) };
         }
         Self {
             task: AtomicPtr::new(ptr),
@@ -1040,15 +1258,16 @@ where
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-impl<F> Drop for WorkItemCancelHandle<F>
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+impl<F, C> Drop for WorkItemCancelHandle<F, C>
 where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
     fn drop(&mut self) {
         let ptr = self.task.swap(null_mut(), Ordering::AcqRel);
         if let Some(ptr) = NonNull::new(ptr) {
-            unsafe { WorkItemTask::<F>::release(ptr) };
+            unsafe { WorkItemTask::<C, F>::release(ptr) };
         }
     }
 }
@@ -1144,9 +1363,18 @@ unsafe fn tracker_complete(tracker: *const WorkItemTracker) {
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-impl<F> WorkItemTask<F>
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+#[inline]
+unsafe fn tracker_begin(_tracker: *const WorkItemTracker) {}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+#[inline]
+unsafe fn tracker_complete(_tracker: *const WorkItemTracker) {}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+impl<C, F> WorkItemTask<C, F>
 where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
     #[inline]
@@ -1156,9 +1384,9 @@ where
 
     unsafe fn allocate(future: F) -> Result<NonNull<Self>, NTSTATUS> {
         let alloc = WdkAllocator::new(PoolType::NonPagedNx, Self::alloc_tag());
-        let layout = core::alloc::Layout::new::<WorkItemTask<F>>();
+        let layout = core::alloc::Layout::new::<WorkItemTask<C, F>>();
 
-        let ptr = unsafe { alloc.alloc(layout) } as *mut WorkItemTask<F>;
+        let ptr = unsafe { alloc.alloc(layout) } as *mut WorkItemTask<C, F>;
         let ptr = NonNull::new(ptr).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
 
         unsafe {
@@ -1170,7 +1398,7 @@ where
                     completed: AtomicU32::new(0),
                     cancel_requested: AtomicU32::new(0),
                     future: ManuallyDrop::new(future),
-                    device: null_mut(),
+                    context: C::default(),
                     tracker: core::ptr::null(),
                     work_item: AtomicPtr::new(null_mut()),
                 },
@@ -1199,16 +1427,16 @@ where
 
     unsafe fn free(ptr: NonNull<Self>) {
         let alloc = WdkAllocator::new(PoolType::NonPagedNx, Self::alloc_tag());
-        let device = unsafe { (*ptr.as_ptr()).device };
+        let context = unsafe { (*ptr.as_ptr()).context };
         unsafe {
             drop(KBox::from_raw_parts(
                 ptr,
                 alloc,
-                core::alloc::Layout::new::<WorkItemTask<F>>(),
+                core::alloc::Layout::new::<WorkItemTask<C, F>>(),
             ));
         }
-        if !device.is_null() {
-            unsafe { ObDereferenceObject(device.cast()) };
+        if context.is_valid() {
+            unsafe { context.release() };
         }
     }
 
@@ -1232,31 +1460,33 @@ where
         let tracker = unsafe { &*ptr.as_ptr() }.tracker;
         unsafe { tracker_begin(tracker) };
 
-        let device = unsafe { &*ptr.as_ptr() }.device;
-        if device.is_null() {
+        let context = unsafe { &*ptr.as_ptr() }.context;
+        if !context.is_valid() {
             unsafe { &*ptr.as_ptr() }.scheduled.store(0, Ordering::Release);
             unsafe { tracker_complete(tracker) };
             return STATUS_INVALID_PARAMETER;
         }
 
-        let work_item = unsafe { IoAllocateWorkItem(device) };
-        if work_item.is_null() {
+        let callback = Self::work_item_callback();
+        let mut work_item: *mut c_void = null_mut();
+        let status =
+            unsafe { context.create_work_item(ptr.as_ptr() as *mut c_void, callback, &mut work_item) };
+        if status != STATUS_SUCCESS {
             unsafe { &*ptr.as_ptr() }.scheduled.store(0, Ordering::Release);
             unsafe { tracker_complete(tracker) };
-            return STATUS_INSUFFICIENT_RESOURCES;
+            return status;
         }
 
-        unsafe { Self::add_ref(ptr) };
         unsafe { &*ptr.as_ptr() }
             .work_item
             .store(work_item, Ordering::Release);
 
+        unsafe { Self::add_ref(ptr) };
         unsafe {
-            IoQueueWorkItem(
+            C::enqueue_work_item(
                 work_item,
-                Some(Self::work_item_routine as PIO_WORKITEM_ROUTINE),
-                WORK_QUEUE_TYPE::DelayedWorkQueue,
                 ptr.as_ptr() as *mut c_void,
+                callback,
             );
         }
 
@@ -1275,15 +1505,54 @@ where
         }
     }
 
+    #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
     unsafe extern "C" fn work_item_routine(
         _device: *mut DEVICE_OBJECT,
         context: *mut c_void,
     ) {
-        let ptr = match NonNull::new(context as *mut WorkItemTask<F>) {
+        let ptr = match NonNull::new(context as *mut WorkItemTask<C, F>) {
             Some(p) => p,
             None => return,
         };
 
+        unsafe { Self::run(ptr, null_mut()) };
+    }
+
+    #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+    unsafe extern "C" fn work_item_routine(work_item: WDFWORKITEM) {
+        let context_info = core::ptr::addr_of!(WORK_ITEM_CONTEXT_TYPE_INFO);
+        let ctx =
+            unsafe { WdfObjectGetTypedContextWorker(work_item as WDFOBJECT, context_info) };
+        if ctx.is_null() {
+            unsafe { WdfObjectDelete(work_item as WDFOBJECT) };
+            return;
+        }
+
+        let task_ptr = unsafe { (*(ctx as *mut WorkItemTaskContext)).task_ptr };
+        let ptr = match NonNull::new(task_ptr as *mut WorkItemTask<C, F>) {
+            Some(p) => p,
+            None => {
+                unsafe { WdfObjectDelete(work_item as WDFOBJECT) };
+                return;
+            }
+        };
+
+        unsafe { Self::run(ptr, work_item.cast()) };
+    }
+
+    #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
+    #[inline]
+    fn work_item_callback() -> TaskContextCallback {
+        Some(Self::work_item_routine)
+    }
+
+    #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "KMDF", not(miri)))]
+    #[inline]
+    fn work_item_callback() -> TaskContextCallback {
+        Some(Self::work_item_routine)
+    }
+
+    unsafe fn run(ptr: NonNull<Self>, fallback_work_item: *mut c_void) {
         let tracker = unsafe { &*ptr.as_ptr() }.tracker;
 
         unsafe { &*ptr.as_ptr() }.scheduled.store(0, Ordering::Release);
@@ -1324,8 +1593,13 @@ where
         let work_item = unsafe { &*ptr.as_ptr() }
             .work_item
             .swap(null_mut(), Ordering::AcqRel);
+        let work_item = if work_item.is_null() {
+            fallback_work_item
+        } else {
+            work_item
+        };
         if !work_item.is_null() {
-            unsafe { IoFreeWorkItem(work_item) };
+            unsafe { C::delete_work_item(work_item) };
         }
 
         unsafe { tracker_complete(tracker) };
@@ -1346,7 +1620,7 @@ where
     );
 
     unsafe fn clone_raw(ptr: *const ()) -> RawWaker {
-        let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
+        let ptr = match NonNull::new(ptr as *mut WorkItemTask<C, F>) {
             Some(p) => p,
             None => return RawWaker::new(core::ptr::null(), &Self::RAW_WAKER_VTABLE),
         };
@@ -1354,7 +1628,7 @@ where
     }
 
     unsafe fn wake_raw(ptr: *const ()) {
-        let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
+        let ptr = match NonNull::new(ptr as *mut WorkItemTask<C, F>) {
             Some(p) => p,
             None => return,
         };
@@ -1363,7 +1637,7 @@ where
     }
 
     unsafe fn wake_by_ref_raw(ptr: *const ()) {
-        let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
+        let ptr = match NonNull::new(ptr as *mut WorkItemTask<C, F>) {
             Some(p) => p,
             None => return,
         };
@@ -1371,7 +1645,7 @@ where
     }
 
     unsafe fn drop_raw(ptr: *const ()) {
-        let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
+        let ptr = match NonNull::new(ptr as *mut WorkItemTask<C, F>) {
             Some(p) => p,
             None => return,
         };
@@ -1379,36 +1653,45 @@ where
     }
 }
 
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-unsafe impl<F> Send for WorkItemTask<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-unsafe impl<F> Sync for WorkItemTask<F> where F: Future<Output = NTSTATUS> + Send + 'static {}
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+unsafe impl<C, F> Send for WorkItemTask<C, F>
+where
+    C: TaskContext,
+    F: Future<Output = NTSTATUS> + Send + 'static,
+{
+}
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+unsafe impl<C, F> Sync for WorkItemTask<C, F>
+where
+    C: TaskContext,
+    F: Future<Output = NTSTATUS> + Send + 'static,
+{
+}
 
-/// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM).
+/// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM/KMDF).
 ///
 /// Note: ensure outstanding work items are drained before driver unload to
 /// avoid freeing device objects while work-item callbacks are still running.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-pub fn spawn_task<F>(device: *mut DEVICE_OBJECT, future: F) -> NTSTATUS
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub fn spawn_task<C, F>(context: C, future: F) -> NTSTATUS
 where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
-    if device.is_null() {
+    if !context.is_valid() {
         return STATUS_INVALID_PARAMETER;
     }
-    let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
+    let ptr = match unsafe { WorkItemTask::<C, F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return s,
     };
 
     unsafe {
-        if !device.is_null() {
-            ObReferenceObject(device.cast());
-        }
-        (&mut *ptr.as_ptr()).device = device;
+        context.retain();
+        (&mut *ptr.as_ptr()).context = context;
     }
-    let status = unsafe { WorkItemTask::<F>::schedule(ptr) };
-    unsafe { WorkItemTask::<F>::release(ptr) };
+    let status = unsafe { WorkItemTask::<C, F>::schedule(ptr) };
+    unsafe { WorkItemTask::<C, F>::release(ptr) };
 
     status
 }
@@ -1427,55 +1710,52 @@ where
     if device.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
+    let ptr = match unsafe { WorkItemTask::<*mut DEVICE_OBJECT, F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return s,
     };
 
     unsafe {
         let task = &mut *ptr.as_ptr();
-        if !device.is_null() {
-            ObReferenceObject(device.cast());
-        }
-        task.device = device;
+        device.retain();
+        task.context = device;
         task.tracker = tracker as *const WorkItemTracker;
     }
-    let status = unsafe { WorkItemTask::<F>::schedule(ptr) };
-    unsafe { WorkItemTask::<F>::release(ptr) };
+    let status = unsafe { WorkItemTask::<*mut DEVICE_OBJECT, F>::schedule(ptr) };
+    unsafe { WorkItemTask::<*mut DEVICE_OBJECT, F>::release(ptr) };
 
     status
 }
 
-/// Spawn a future onto the PASSIVE_LEVEL work-item executor (WDM) and return a
+/// Spawn a future onto the PASSIVE_LEVEL work-item executor and return a
 /// cancellation handle.
-#[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]
-pub fn spawn_task_cancellable<F>(
-    device: *mut DEVICE_OBJECT,
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub fn spawn_task_cancellable<C, F>(
+    context: C,
     future: F,
-) -> Result<WorkItemCancelHandle<F>, NTSTATUS>
+) -> Result<WorkItemCancelHandle<F, C>, NTSTATUS>
 where
+    C: TaskContext,
     F: Future<Output = NTSTATUS> + Send + 'static,
 {
-    if device.is_null() {
+    if !context.is_valid() {
         return Err(STATUS_INVALID_PARAMETER);
     }
-    let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
+    let ptr = match unsafe { WorkItemTask::<C, F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return Err(s),
     };
 
     unsafe {
         let task = &mut *ptr.as_ptr();
-        if !device.is_null() {
-            ObReferenceObject(device.cast());
-        }
-        task.device = device;
+        context.retain();
+        task.context = context;
         task.tracker = core::ptr::null();
     }
 
     let handle = unsafe { WorkItemCancelHandle::new(ptr) };
-    let status = unsafe { WorkItemTask::<F>::schedule(ptr) };
-    unsafe { WorkItemTask::<F>::release(ptr) };
+    let status = unsafe { WorkItemTask::<C, F>::schedule(ptr) };
+    unsafe { WorkItemTask::<C, F>::release(ptr) };
 
     if status != STATUS_SUCCESS {
         drop(handle);
@@ -1524,23 +1804,21 @@ where
     if device.is_null() {
         return Err(STATUS_INVALID_PARAMETER);
     }
-    let ptr = match unsafe { WorkItemTask::<F>::allocate(future) } {
+    let ptr = match unsafe { WorkItemTask::<*mut DEVICE_OBJECT, F>::allocate(future) } {
         Ok(p) => p,
         Err(s) => return Err(s),
     };
 
     unsafe {
         let task = &mut *ptr.as_ptr();
-        if !device.is_null() {
-            ObReferenceObject(device.cast());
-        }
-        task.device = device;
+        device.retain();
+        task.context = device;
         task.tracker = tracker as *const WorkItemTracker;
     }
 
     let handle = unsafe { WorkItemCancelHandle::new(ptr) };
-    let status = unsafe { WorkItemTask::<F>::schedule(ptr) };
-    unsafe { WorkItemTask::<F>::release(ptr) };
+    let status = unsafe { WorkItemTask::<*mut DEVICE_OBJECT, F>::schedule(ptr) };
+    unsafe { WorkItemTask::<*mut DEVICE_OBJECT, F>::release(ptr) };
 
     if status != STATUS_SUCCESS {
         drop(handle);

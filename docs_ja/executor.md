@@ -3,7 +3,7 @@
 `executor` モジュールは 2 種類の実行モデルを提供します。
 
 - DPC 実行（DISPATCH_LEVEL）
-- Work-item 実行（PASSIVE_LEVEL / WDM）
+- Work-item 実行（PASSIVE_LEVEL / WDM・KMDF）
 
 ホスト/Miri ではスタブ実装が使われ、Future を 1 回だけ poll します。
 
@@ -36,22 +36,32 @@ CPU インデックス:
 - group/number から index を算出
 - 範囲外の場合はデバッグ trace を出し、追跡を無効化
 
-## Work-item Executor (WDM)
+## Work-item Executor (WDM/KMDF)
 
-`driver + async-com-kernel + driver_model__driver_type=WDM` で有効。
+`driver + async-com-kernel` かつ
+`driver_model__driver_type=WDM` または `driver_model__driver_type=KMDF` で有効。
 
 API:
 
-- `spawn_task` / `spawn_task_tracked`
-- `spawn_task_cancellable` / `spawn_task_cancellable_tracked`
-- `WorkItemTracker`, `WorkItemCancelHandle`
+- `spawn_task`
+- `spawn_task_cancellable`
+- `WorkItemCancelHandle`
+- `TaskContext` / `DefaultTaskContext`
+- `spawn_task_tracked`（WDMのみ）
+- `spawn_task_cancellable_tracked`（WDMのみ）
+- `WorkItemTracker`（WDMのみ）
+
+`TaskContext` は unsafe trait です。カスタム backend 以外は
+WDM/KMDF の既存実装を使ってください。
 
 動作:
 
 - PASSIVE_LEVEL で実行
-- `device` は **必ず非 null**
+- `context` は **必ず非 null**
   - null の場合は `STATUS_INVALID_PARAMETER` を返す
-- `WorkItemTracker::drain` で unload 前に処理を待つ
+  - WDM: `*mut DEVICE_OBJECT`
+  - KMDF: `WDFDEVICE`
+- `WorkItemTracker::drain` で unload 前に処理を待つ（WDMのみ）
 
 ## ホスト/Miri スタブ
 

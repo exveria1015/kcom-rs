@@ -82,7 +82,7 @@ pub use executor::{spawn_dpc_task_cancellable, CancelHandle};
 #[cfg(any(
     not(feature = "driver"),
     miri,
-    all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri))
+    all(feature = "driver", feature = "async-com-kernel", not(miri))
 ))]
 pub use executor::spawn_task;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
@@ -98,6 +98,14 @@ pub use executor::{
 pub use task::{try_finally, Cancellable};
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub use executor::KernelTimerFuture;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub use executor::{
+    spawn_task_cancellable,
+    DefaultTaskContext,
+    TaskContext,
+    TaskContextCallback,
+    WorkItemCancelHandle,
+};
 #[cfg(all(
     feature = "driver",
     feature = "async-com-kernel",
@@ -105,10 +113,8 @@ pub use executor::KernelTimerFuture;
     not(miri)
 ))]
 pub use executor::{
-    spawn_task_cancellable,
     spawn_task_cancellable_tracked,
     spawn_task_tracked,
-    WorkItemCancelHandle,
     WorkItemTracker,
 };
 

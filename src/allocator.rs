@@ -318,10 +318,10 @@ pub struct WdkAllocator {
 #[cfg(all(feature = "driver", not(miri)))]
 const WDK_ALLOC_ALIGNMENT: usize = if cfg!(target_pointer_width = "64") { 16 } else { 8 };
 
-#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions, not(miri)))]
 const WDK_ALLOC_MAGIC: usize = 0x4b43_4f4d;
 
-#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions, not(miri)))]
 #[repr(C)]
 struct WdkAllocHeader {
     magic: usize,
@@ -329,20 +329,25 @@ struct WdkAllocHeader {
     align: usize,
 }
 
-#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions, not(miri)))]
 const WDK_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<WdkAllocHeader>();
 
-#[cfg(all(feature = "driver", feature = "wdk-alloc-align", not(debug_assertions)))]
+#[cfg(all(
+    feature = "driver",
+    feature = "wdk-alloc-align",
+    not(debug_assertions),
+    not(miri)
+))]
 const WDK_ALLOC_HEADER_SIZE: usize = core::mem::size_of::<usize>();
 
-#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "driver", feature = "wdk-alloc-align", debug_assertions, not(miri)))]
 #[inline]
 fn assert_overaligned_header(header: &WdkAllocHeader, layout: Layout) {
     debug_assert_eq!(header.magic, WDK_ALLOC_MAGIC);
     debug_assert_eq!(header.align, layout.align());
 }
 
-#[cfg(all(feature = "wdk-alloc-align", debug_assertions))]
+#[cfg(all(feature = "wdk-alloc-align", debug_assertions, not(miri)))]
 #[doc(hidden)]
 pub fn debug_assert_overaligned_layout(alloc_align: usize, layout: Layout) {
     let header = WdkAllocHeader {
