@@ -30,3 +30,5 @@ fn main() {
     {
     }
 }
+#[cfg(feature = "driver")]
+mod driver_entry_stub;

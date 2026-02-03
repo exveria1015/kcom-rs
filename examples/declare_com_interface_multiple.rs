@@ -83,3 +83,5 @@ fn main() {
         ComObjectN::<Multi, IFooVtbl, (IBarVtbl,)>::shim_release(raw);
     }
 }
+#[cfg(feature = "driver")]
+mod driver_entry_stub;

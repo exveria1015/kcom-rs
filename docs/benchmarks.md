@@ -31,3 +31,31 @@ The C++ benchmarks build to `benches/*.exe`. Run from the repo root:
 
 Recorded numbers live in `Benchmark.md`.
 
+## Kernel async COM bench (kcom-tests)
+
+`kcom-tests` exposes a small kernel-only benchmark helper that can be embedded
+into a driver and used to compare `async-com` vs `async-com-fused`.
+
+Build-time knobs (choose one scenario):
+- `bench-scenario-immediate`
+- `bench-scenario-yield1`
+- `bench-scenario-yieldN`
+
+Iteration/parallelism presets (optional, defaults are medium/4):
+- `bench-iter-small` | `bench-iter-medium` | `bench-iter-large`
+- `bench-par-1` | `bench-par-4` | `bench-par-16`
+
+Optional overrides (compile-time env vars):
+- `KCOM_BENCH_ITERS`
+- `KCOM_BENCH_PAR`
+- `KCOM_BENCH_YIELDS`
+
+Example build (fused enabled, 1-yield, custom size):
+```text
+set KCOM_BENCH_ITERS=200000
+set KCOM_BENCH_PAR=8
+cargo build -p kcom-tests --features "bench-async-com bench-scenario-yield1 async-com-fused"
+```
+
+Call `kcom_tests::bench_async_com::run_selected_bench()` from a driver
+entrypoint at PASSIVE_LEVEL and report the returned `BenchResult` fields.

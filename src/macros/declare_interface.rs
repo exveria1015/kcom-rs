@@ -320,46 +320,67 @@ macro_rules! __kcom_define_interface {
                         $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_add_ref(this);
                     }
                     let init = wrapper.inner.$method_name($($arg_name),*);
-                    let mut future = match init.try_pin() {
-                        Ok(future) => future,
-                        Err(err) => {
-                            unsafe {
-                                $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_release(this);
-                            }
-                            let status: $crate::NTSTATUS = err.into();
-                            return match $crate::async_com::spawn_async_operation_error_raw::<
+                    let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
+                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_release;
+                    let guard_ptr = $crate::GuardPtr::new(this);
+                    #[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+                    {
+                        let op = $crate::async_com::spawn_async_operation_raw_with_init::<$ret_ty, _, _>(
+                            init,
+                            guard_ptr,
+                            release_fn,
+                        );
+                        match op {
+                            Ok(ptr) => ptr,
+                            Err(status) => match $crate::async_com::spawn_async_operation_error_raw::<
                                 $ret_ty,
                                 <T as $trait_name>::[<$method_name:camel Future>],
                             >(status) {
                                 Ok(ptr) => ptr,
                                 Err(_status) => core::ptr::null_mut(),
-                            };
+                            },
                         }
-                    };
-                    let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
-                        $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_release;
-                    let guard_ptr = $crate::GuardPtr::new(this);
-                    let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
-                        struct ReleaseGuard {
-                            ptr: $crate::GuardPtr,
-                            release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
-                        }
-                        impl Drop for ReleaseGuard {
-                            fn drop(&mut self) {
-                                unsafe { (self.release)(self.ptr.as_ptr()) };
+                    }
+                    #[cfg(any(not(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel")), miri))]
+                    {
+                        let mut future = match init.try_pin() {
+                            Ok(future) => future,
+                            Err(err) => {
+                                unsafe {
+                                    $crate::wrapper::ComObject::<T, [<$trait_name Vtbl>]>::shim_release(this);
+                                }
+                                let status: $crate::NTSTATUS = err.into();
+                                return match $crate::async_com::spawn_async_operation_error_raw::<
+                                    $ret_ty,
+                                    <T as $trait_name>::[<$method_name:camel Future>],
+                                >(status) {
+                                    Ok(ptr) => ptr,
+                                    Err(_status) => core::ptr::null_mut(),
+                                };
                             }
-                        }
-                        let _guard = ReleaseGuard {
-                            ptr: guard_ptr,
-                            release: release_fn,
                         };
-                        future.as_mut().await
-                    });
-                    match op {
-                        Ok(ptr) => ptr,
-                        Err(_status) => {
-                            unsafe { (release_fn)(this) };
-                            core::ptr::null_mut()
+                        let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
+                            struct ReleaseGuard {
+                                ptr: $crate::GuardPtr,
+                                release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
+                            }
+                            impl Drop for ReleaseGuard {
+                                fn drop(&mut self) {
+                                    unsafe { (self.release)(self.ptr.as_ptr()) };
+                                }
+                            }
+                            let _guard = ReleaseGuard {
+                                ptr: guard_ptr,
+                                release: release_fn,
+                            };
+                            future.as_mut().await
+                        });
+                        match op {
+                            Ok(ptr) => ptr,
+                            Err(_status) => {
+                                unsafe { (release_fn)(this) };
+                                core::ptr::null_mut()
+                            }
                         }
                     }
                 }
@@ -387,46 +408,67 @@ macro_rules! __kcom_define_interface {
                         $crate::wrapper::ComObjectN::<T, P, S, A>::shim_add_ref(primary);
                     }
                     let init = wrapper.inner.$method_name($($arg_name),*);
-                    let mut future = match init.try_pin() {
-                        Ok(future) => future,
-                        Err(err) => {
-                            unsafe {
-                                $crate::wrapper::ComObjectN::<T, P, S, A>::shim_release(primary);
-                            }
-                            let status: $crate::NTSTATUS = err.into();
-                            return match $crate::async_com::spawn_async_operation_error_raw::<
+                    let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
+                        $crate::wrapper::ComObjectN::<T, P, S, A>::shim_release;
+                    let guard_ptr = $crate::GuardPtr::new(primary);
+                    #[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+                    {
+                        let op = $crate::async_com::spawn_async_operation_raw_with_init::<$ret_ty, _, _>(
+                            init,
+                            guard_ptr,
+                            release_fn,
+                        );
+                        match op {
+                            Ok(ptr) => ptr,
+                            Err(status) => match $crate::async_com::spawn_async_operation_error_raw::<
                                 $ret_ty,
                                 <T as $trait_name>::[<$method_name:camel Future>],
                             >(status) {
                                 Ok(ptr) => ptr,
                                 Err(_status) => core::ptr::null_mut(),
-                            };
+                            },
                         }
-                    };
-                    let release_fn: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
-                        $crate::wrapper::ComObjectN::<T, P, S, A>::shim_release;
-                    let guard_ptr = $crate::GuardPtr::new(primary);
-                    let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
-                        struct ReleaseGuard {
-                            ptr: $crate::GuardPtr,
-                            release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
-                        }
-                        impl Drop for ReleaseGuard {
-                            fn drop(&mut self) {
-                                unsafe { (self.release)(self.ptr.as_ptr()) };
+                    }
+                    #[cfg(any(not(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel")), miri))]
+                    {
+                        let mut future = match init.try_pin() {
+                            Ok(future) => future,
+                            Err(err) => {
+                                unsafe {
+                                    $crate::wrapper::ComObjectN::<T, P, S, A>::shim_release(primary);
+                                }
+                                let status: $crate::NTSTATUS = err.into();
+                                return match $crate::async_com::spawn_async_operation_error_raw::<
+                                    $ret_ty,
+                                    <T as $trait_name>::[<$method_name:camel Future>],
+                                >(status) {
+                                    Ok(ptr) => ptr,
+                                    Err(_status) => core::ptr::null_mut(),
+                                };
                             }
-                        }
-                        let _guard = ReleaseGuard {
-                            ptr: guard_ptr,
-                            release: release_fn,
                         };
-                        future.as_mut().await
-                    });
-                    match op {
-                        Ok(ptr) => ptr,
-                        Err(_status) => {
-                            unsafe { (release_fn)(primary) };
-                            core::ptr::null_mut()
+                        let op = $crate::async_com::spawn_async_operation_raw::<$ret_ty, _>(async move {
+                            struct ReleaseGuard {
+                                ptr: $crate::GuardPtr,
+                                release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
+                            }
+                            impl Drop for ReleaseGuard {
+                                fn drop(&mut self) {
+                                    unsafe { (self.release)(self.ptr.as_ptr()) };
+                                }
+                            }
+                            let _guard = ReleaseGuard {
+                                ptr: guard_ptr,
+                                release: release_fn,
+                            };
+                            future.as_mut().await
+                        });
+                        match op {
+                            Ok(ptr) => ptr,
+                            Err(_status) => {
+                                unsafe { (release_fn)(primary) };
+                                core::ptr::null_mut()
+                            }
                         }
                     }
                 }

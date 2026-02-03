@@ -14,7 +14,12 @@ use core::cell::{Cell, RefCell};
 use crate::alloc::boxed::Box;
 
 use crate::iunknown::{NTSTATUS, STATUS_NOT_SUPPORTED};
-#[cfg(all(feature = "driver", not(miri)))]
+#[cfg(all(
+    feature = "driver",
+    feature = "async-com-kernel",
+    driver_model__driver_type = "WDM",
+    not(miri)
+))]
 use crate::iunknown::STATUS_INVALID_PARAMETER;
 #[cfg(any(not(feature = "driver"), feature = "async-com-kernel", miri))]
 use crate::iunknown::STATUS_SUCCESS;

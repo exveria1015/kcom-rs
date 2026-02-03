@@ -71,3 +71,5 @@ fn main() {
 
 #[cfg(not(feature = "async-com"))]
 fn main() {}
+#[cfg(feature = "driver")]
+mod driver_entry_stub;

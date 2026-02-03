@@ -43,3 +43,5 @@ fn main() {
     let status = spawn_task(YieldOnce { yielded: false });
     assert_eq!(status, STATUS_SUCCESS);
 }
+#[cfg(feature = "driver")]
+mod driver_entry_stub;

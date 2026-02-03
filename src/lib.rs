@@ -11,7 +11,7 @@ extern crate std;
 
 pub mod iunknown;
 pub mod allocator;
-#[cfg(all(feature = "driver", feature = "driver-test-stub"))]
+#[cfg(all(feature = "driver", any(test, feature = "driver-test-stub")))]
 mod driver_test_stub;
 pub mod executor;
 pub mod macros;
@@ -77,6 +77,8 @@ pub use async_com::{
     AsyncStatus,
     AsyncValueType,
 };
+#[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub use async_com::init_async_com_slabs;
 
 pub use executor::{spawn_dpc_task_cancellable, CancelHandle};
 #[cfg(any(

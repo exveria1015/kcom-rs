@@ -38,3 +38,5 @@ fn main() {
     #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM"))]
     driver_only::run();
 }
+#[cfg(feature = "driver")]
+mod driver_entry_stub;

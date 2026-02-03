@@ -52,3 +52,5 @@ fn main() {
         ComObject::<Worker, IResultSampleVtbl>::shim_release(raw);
     }
 }
+#[cfg(feature = "driver")]
+mod driver_entry_stub;

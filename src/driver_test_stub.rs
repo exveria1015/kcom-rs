@@ -2,7 +2,7 @@
 //
 // Stub DriverEntry for user-mode test builds with driver features enabled.
 
-#![cfg(all(feature = "driver", feature = "driver-test-stub"))]
+#![cfg(all(feature = "driver", any(test, feature = "driver-test-stub")))]
 
 use core::ffi::c_void;
 

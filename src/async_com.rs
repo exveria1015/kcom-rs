@@ -23,6 +23,32 @@ use crate::traits::ComImpl;
 use crate::vtable::InterfaceVtable;
 use crate::wrapper::{ComObject, PanicGuard};
 
+#[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+mod fused;
+#[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub use fused::init_async_com_slabs;
+
+#[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+struct ReleaseGuard {
+    ptr: GuardPtr,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+}
+
+#[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+impl ReleaseGuard {
+    #[inline]
+    fn new(ptr: GuardPtr, release: unsafe extern "system" fn(*mut c_void) -> u32) -> Self {
+        Self { ptr, release }
+    }
+}
+
+#[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+impl Drop for ReleaseGuard {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self.ptr.as_ptr()) };
+    }
+}
+
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AsyncStatus {
@@ -140,6 +166,22 @@ where
     error: AtomicI32,
     result: UnsafeCell<MaybeUninit<T>>,
     _marker: PhantomData<F>,
+}
+
+#[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+#[doc(hidden)]
+pub fn spawn_async_operation_raw_with_init<T, F, A>(
+    init: impl crate::allocator::InitBoxTrait<F, A, NTSTATUS>,
+    guard_ptr: GuardPtr,
+    release_fn: unsafe extern "system" fn(*mut c_void) -> u32,
+) -> Result<*mut AsyncOperationRaw<T>, NTSTATUS>
+where
+    T: AsyncValueType,
+    F: Future<Output = T> + Send + 'static,
+    A: crate::allocator::Allocator + Send + Sync,
+{
+    let guard = ReleaseGuard::new(guard_ptr, release_fn);
+    fused::spawn_raw_with_init(init, Some(guard))
 }
 
 #[cfg(test)]
@@ -371,7 +413,14 @@ where
     T: AsyncValueType,
     F: Future<Output = T> + Send + 'static,
 {
-    AsyncOperationTask::<T, F>::spawn_raw(future)
+    #[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
+    {
+        return fused::spawn_raw(future);
+    }
+    #[cfg(any(not(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel")), miri))]
+    {
+        AsyncOperationTask::<T, F>::spawn_raw(future)
+    }
 }
 
 #[inline]

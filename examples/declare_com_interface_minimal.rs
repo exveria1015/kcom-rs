@@ -50,3 +50,5 @@ fn main() {
     drop(com_ref);
     unsafe { ComObject::<Foo, IFooVtbl>::shim_release(raw) };
 }
+#[cfg(feature = "driver")]
+mod driver_entry_stub;

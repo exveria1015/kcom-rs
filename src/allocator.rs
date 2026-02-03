@@ -219,7 +219,18 @@ impl<T: ?Sized, A: Allocator> Drop for KBox<T, A> {
 }
 
 pub trait InitBoxTrait<T, A: Allocator, E> {
-    fn try_pin(self) -> Result<Pin<KBox<T, A>>, KBoxError<E>>;
+    type Init: PinInit<T, E>;
+
+    fn into_components(self) -> (A, Self::Init);
+
+    #[inline]
+    fn try_pin(self) -> Result<Pin<KBox<T, A>>, KBoxError<E>>
+    where
+        Self: Sized,
+    {
+        let (alloc, init) = self.into_components();
+        KBox::try_pin_init(alloc, init)
+    }
 }
 
 pub struct InitBox<T, A: Allocator, E, I> {
@@ -246,9 +257,11 @@ impl<T, A: Allocator, E, I> InitBoxTrait<T, A, E> for InitBox<T, A, E, I>
 where
     I: PinInit<T, E>,
 {
+    type Init = I;
+
     #[inline]
-    fn try_pin(self) -> Result<Pin<KBox<T, A>>, KBoxError<E>> {
-        KBox::try_pin_init(self.alloc, self.init)
+    fn into_components(self) -> (A, Self::Init) {
+        (self.alloc, self.init)
     }
 }
 

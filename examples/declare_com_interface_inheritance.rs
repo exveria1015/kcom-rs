@@ -74,3 +74,5 @@ fn main() {
         ComObject::<Miniport, IMiniportWaveRTVtbl>::shim_release(raw);
     }
 }
+#[cfg(feature = "driver")]
+mod driver_entry_stub;
