@@ -64,8 +64,10 @@ pub struct OwnedUnicodeString<A: Allocator + Send + Sync = GlobalAllocator> {
 
 /// A stack-backed UNICODE_STRING with a fixed UTF-16 buffer.
 ///
-/// The buffer stores a trailing NUL. The returned UNICODE_STRING value is
-/// constructed on demand and borrows the internal buffer.
+/// The buffer stores a trailing NUL. `N` is the total buffer size, so the
+/// maximum usable string length is `N - 1` UTF-16 code units.
+/// The returned UNICODE_STRING value is constructed on demand and borrows the
+/// internal buffer.
 pub struct LocalUnicodeString<const N: usize> {
     buffer: [u16; N],
     len: usize,

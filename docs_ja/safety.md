@@ -72,6 +72,10 @@ Work-item は `PASSIVE_LEVEL` で実行されます。
 `kcom` はフェイルファストします（ドライバでは bug check）。
 この動作は `leaky-hardening` 有効時も変わりません。
 
+**警告:** ユーザー定義 `Drop` 内で `AddRef`（直接/間接問わず）を呼ぶと、
+ドライバビルドでは bug check（BSOD）でシステムが停止します。
+破棄中のオブジェクトを復活させないでください。
+
 ## Provenance ポリシー
 
 Async ガードのポインタは `NonNull<c_void>` で保持し、strict provenance を

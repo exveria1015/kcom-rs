@@ -74,9 +74,12 @@ AddRef). If detected, the code triggers a fail-fast path (bug check in driver
 builds), even when `leaky-hardening` is enabled. This prevents use-after-free
 when the object is resurrected during destruction.
 
+**Warning:** Calling `AddRef` (directly or indirectly) from a user `Drop`
+implementation will crash the system in driver builds (bug check / BSOD).
+Never attempt to resurrect COM objects during destruction.
+
 ## Provenance policy
 
 Async guard pointers are stored using `NonNull<c_void>` with strict provenance
 semantics by default. This avoids integer-based casts while keeping the ABI
 layout identical to a raw pointer.
-

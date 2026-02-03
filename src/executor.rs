@@ -537,6 +537,22 @@ where
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+struct TaskLayoutProbe;
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+impl Future for TaskLayoutProbe {
+    type Output = NTSTATUS;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(STATUS_SUCCESS)
+    }
+}
+
+// Ensure TaskHeader stays at offset 0 within Task<F>.
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const _: [(); 0] = [(); core::mem::offset_of!(Task<TaskLayoutProbe>, header)];
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 impl<F> Task<F>
 where
     F: Future<Output = NTSTATUS> + Send + 'static,

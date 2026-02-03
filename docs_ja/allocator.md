@@ -19,6 +19,9 @@ pub trait Allocator {
 - `ComObject`/`KBox` はアロケータを割り当て領域内に保持し、解放前に
   `ptr::read` で取り出す。アロケータはビットコピーで安全に移動でき、
   解放対象のメモリを参照しない軽量ハンドル型（`Copy` 相当）が前提。
+- 型付きの `dealloc_value_in` / `dealloc_slice_in` を使うと、
+  レイアウトはコンパイル時に固定できます。ただしポインタと要素数が
+  元の割り当てと一致している必要があるため **unsafe** です。
 
 ## GlobalAllocator
 

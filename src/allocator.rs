@@ -58,6 +58,32 @@ pub fn try_alloc_value_in<T, A: Allocator>(alloc: &A, value: T) -> Result<NonNul
     Ok(ptr)
 }
 
+/// Deallocate a single `T` using its compile-time layout.
+///
+/// # Safety
+/// `ptr` must have been allocated by `alloc` with the same `T`.
+#[inline]
+pub unsafe fn dealloc_value_in<T, A: Allocator>(alloc: &A, ptr: NonNull<T>) {
+    let layout = Layout::new::<T>();
+    unsafe { alloc.dealloc(ptr.as_ptr() as *mut u8, layout) };
+}
+
+/// Deallocate a `[T; len]` buffer using a type-derived layout.
+///
+/// # Safety
+/// `ptr` must have been allocated by `alloc` for `len` elements of `T`.
+#[inline]
+pub unsafe fn dealloc_slice_in<T, A: Allocator>(alloc: &A, ptr: NonNull<T>, len: usize) {
+    let layout = match Layout::array::<T>(len) {
+        Ok(layout) => layout,
+        Err(_) => {
+            debug_assert!(false, "dealloc_slice_in: layout overflow");
+            return;
+        }
+    };
+    unsafe { alloc.dealloc(ptr.as_ptr() as *mut u8, layout) };
+}
+
 pub enum KBoxError<E> {
     Alloc(NTSTATUS),
     Init(E),

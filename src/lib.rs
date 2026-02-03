@@ -45,7 +45,16 @@ pub use vtable::{ComInterfaceInfo, InterfaceVtable, match_interface_ptr};
 pub use smart_ptr::{ComInterface, ComRc, ThreadSafeComInterface};
 pub use trace::{clear_trace_hook, set_trace_hook, TraceHook};
 pub use allocator::{
-    Allocator, GlobalAllocator, InitBox, InitBoxTrait, KBox, KBoxError, PinInit, PinInitOnce,
+    dealloc_slice_in,
+    dealloc_value_in,
+    Allocator,
+    GlobalAllocator,
+    InitBox,
+    InitBoxTrait,
+    KBox,
+    KBoxError,
+    PinInit,
+    PinInitOnce,
 };
 #[cfg(feature = "driver")]
 pub use allocator::{init_box_with_tag, KernelInitBox, PoolType, WdkAllocator};

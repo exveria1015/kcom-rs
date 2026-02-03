@@ -21,6 +21,9 @@ Notes:
   with `ptr::read` before freeing. Allocators must be safe to move by bitcopy
   and must not borrow from the allocation being freed (prefer small handle or
   `Copy`-like types).
+- Prefer the typed helpers `dealloc_value_in` / `dealloc_slice_in` to ensure
+  the layout matches the type at compile time. These helpers are still `unsafe`
+  because the pointer and element count must match the original allocation.
 
 ## GlobalAllocator
 
@@ -71,4 +74,3 @@ Zeroing:
 
 `pin_init!` and `pin_init_async!` macros make common initialization patterns
  concise.
-
