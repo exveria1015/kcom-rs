@@ -14,6 +14,7 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use super::{AsyncOperationRaw, AsyncOperationVtbl, AsyncStatus, AsyncValueType, ReleaseGuard};
 use crate::allocator::{Allocator, InitBoxTrait, PinInit, PinInitOnce};
+use crate::async_com_metrics as metrics;
 use crate::iunknown::{
     GUID, IUnknownVtbl, NTSTATUS, STATUS_CANCELLED, STATUS_INSUFFICIENT_RESOURCES,
     STATUS_NOINTERFACE, STATUS_PENDING, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, IID_IUNKNOWN,
@@ -22,9 +23,13 @@ use crate::ntddk::{KeGetCurrentIrql, KeInitializeDpc, KeInsertQueueDpc, KDPC, PK
 use crate::refcount;
 use crate::wrapper::PanicGuard;
 
-use wdk_sys::{NPAGED_LOOKASIDE_LIST, PNPAGED_LOOKASIDE_LIST, POOL_TYPE, PVOID, SIZE_T, ULONG, PASSIVE_LEVEL};
+use wdk_sys::{
+    ALL_PROCESSOR_GROUPS, PASSIVE_LEVEL, PROCESSOR_NUMBER, PSLIST_ENTRY, SLIST_HEADER,
+};
 use wdk_sys::ntddk::{
-    ExAllocateFromNPagedLookasideList, ExFreeToNPagedLookasideList, ExInitializeNPagedLookasideList,
+    ExpInterlockedPopEntrySList, ExpInterlockedPushEntrySList, InitializeSListHead,
+    KeGetCurrentProcessorNumberEx, KeGetProcessorIndexFromNumber, KeQueryActiveProcessorCountEx,
+    KeSetTargetProcessorDpcEx,
 };
 
 const STATUS_MASK: u32 = 0x0000_FFFF;
@@ -43,6 +48,7 @@ const SLABS_STATE_UNINIT: u32 = 0;
 const SLABS_STATE_INITING: u32 = 1;
 const SLABS_STATE_READY: u32 = 2;
 static SLABS_STATE: AtomicU32 = AtomicU32::new(SLABS_STATE_UNINIT);
+
 
 #[repr(C, align(64))]
 struct TaskHeader<T: AsyncValueType> {
@@ -179,11 +185,20 @@ where
             .fetch_and(!(FLAG_POLLING | FLAG_DPC_QUEUED), Ordering::AcqRel);
         if (prev & FLAG_DPC_QUEUED) != 0 {
             unsafe {
-                KeInsertQueueDpc(
+                let mut proc = PROCESSOR_NUMBER::default();
+                let proc_ptr = core::ptr::addr_of_mut!(proc);
+                KeGetCurrentProcessorNumberEx(proc_ptr);
+                let _ = KeSetTargetProcessorDpcEx(&mut (*ptr.as_ptr()).body.dpc as PKDPC, proc_ptr);
+                let inserted = KeInsertQueueDpc(
                     &mut (*ptr.as_ptr()).body.dpc as PKDPC,
                     core::ptr::null_mut(),
                     core::ptr::null_mut(),
                 );
+                if inserted == 0 {
+                    metrics::inc_dpc_skipped();
+                } else {
+                    metrics::inc_dpc_enqueued();
+                }
             }
         }
     }
@@ -198,49 +213,78 @@ where
 
         let prev = header.status.fetch_or(FLAG_DPC_QUEUED, Ordering::AcqRel);
         if (prev & FLAG_DPC_QUEUED) != 0 {
+            metrics::inc_dpc_skipped();
             return;
         }
 
         if (prev & FLAG_POLLING) == 0 {
             unsafe {
-                KeInsertQueueDpc(
+                let mut proc = PROCESSOR_NUMBER::default();
+                let proc_ptr = core::ptr::addr_of_mut!(proc);
+                KeGetCurrentProcessorNumberEx(proc_ptr);
+                let _ = KeSetTargetProcessorDpcEx(&mut (*ptr.as_ptr()).body.dpc as PKDPC, proc_ptr);
+                let inserted = KeInsertQueueDpc(
                     &mut (*ptr.as_ptr()).body.dpc as PKDPC,
                     core::ptr::null_mut(),
                     core::ptr::null_mut(),
                 );
+                if inserted == 0 {
+                    metrics::inc_dpc_skipped();
+                } else {
+                    metrics::inc_dpc_enqueued();
+                }
             }
         }
     }
 
     const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
-        Self::waker_clone,
-        Self::waker_wake,
-        Self::waker_wake_by_ref,
-        Self::waker_drop,
+        Self::waker_clone_owned,
+        Self::waker_wake_owned,
+        Self::waker_wake_by_ref_owned,
+        Self::waker_drop_owned,
+    );
+
+    const RAW_WAKER_BORROWED_VTABLE: RawWakerVTable = RawWakerVTable::new(
+        Self::waker_clone_owned,
+        Self::waker_wake_borrowed,
+        Self::waker_wake_by_ref_borrowed,
+        Self::waker_drop_borrowed,
     );
 
     #[inline]
-    unsafe fn poll_inner(ptr: NonNull<Self>) -> Poll<T> {
+    unsafe fn poll_with(ptr: NonNull<Self>, cx: &mut Context<'_>) -> Poll<T> {
         let task = unsafe { &mut *ptr.as_ptr() };
-        let waker = unsafe { Waker::from_raw(Self::raw_waker(ptr)) };
-        let mut cx = Context::from_waker(&waker);
         let future = unsafe { Pin::new_unchecked(&mut task.body.future) };
-        future.poll(&mut cx)
+        metrics::inc_poll_total();
+        match future.poll(cx) {
+            Poll::Ready(value) => {
+                metrics::inc_poll_ready();
+                Poll::Ready(value)
+            }
+            Poll::Pending => {
+                metrics::inc_poll_pending();
+                Poll::Pending
+            }
+        }
     }
 
     #[inline]
-    unsafe fn raw_waker(ptr: NonNull<Self>) -> RawWaker {
+    unsafe fn raw_waker_owned(ptr: NonNull<Self>) -> RawWaker {
         unsafe { Self::add_ref(ptr) };
         RawWaker::new(ptr.as_ptr() as *const (), &Self::RAW_WAKER_VTABLE)
     }
 
-    unsafe fn waker_clone(data: *const ()) -> RawWaker {
-        let ptr = unsafe { NonNull::new_unchecked(data as *mut Self) };
-        unsafe { Self::add_ref(ptr) };
-        RawWaker::new(data, &Self::RAW_WAKER_VTABLE)
+    #[inline]
+    unsafe fn raw_waker_borrowed(ptr: NonNull<Self>) -> RawWaker {
+        RawWaker::new(ptr.as_ptr() as *const (), &Self::RAW_WAKER_BORROWED_VTABLE)
     }
 
-    unsafe fn waker_wake(data: *const ()) {
+    unsafe fn waker_clone_owned(data: *const ()) -> RawWaker {
+        let ptr = unsafe { NonNull::new_unchecked(data as *mut Self) };
+        unsafe { Self::raw_waker_owned(ptr) }
+    }
+
+    unsafe fn waker_wake_owned(data: *const ()) {
         let ptr = unsafe { NonNull::new_unchecked(data as *mut Self) };
         unsafe {
             Self::wake(ptr);
@@ -248,15 +292,27 @@ where
         }
     }
 
-    unsafe fn waker_wake_by_ref(data: *const ()) {
+    unsafe fn waker_wake_by_ref_owned(data: *const ()) {
         let ptr = unsafe { NonNull::new_unchecked(data as *mut Self) };
         unsafe { Self::wake(ptr) };
     }
 
-    unsafe fn waker_drop(data: *const ()) {
+    unsafe fn waker_drop_owned(data: *const ()) {
         let ptr = unsafe { NonNull::new_unchecked(data as *mut Self) };
         unsafe { Self::release(ptr) };
     }
+
+    unsafe fn waker_wake_borrowed(data: *const ()) {
+        let ptr = unsafe { NonNull::new_unchecked(data as *mut Self) };
+        unsafe { Self::wake(ptr) };
+    }
+
+    unsafe fn waker_wake_by_ref_borrowed(data: *const ()) {
+        let ptr = unsafe { NonNull::new_unchecked(data as *mut Self) };
+        unsafe { Self::wake(ptr) };
+    }
+
+    unsafe fn waker_drop_borrowed(_data: *const ()) {}
 
     unsafe extern "C" fn dpc_callback(
         _dpc: PKDPC,
@@ -269,6 +325,8 @@ where
             None => return,
         };
 
+        metrics::inc_dpc_run();
+
         let status = unsafe { &(*ptr.as_ptr()).header.status }.load(Ordering::Acquire);
         if (status & STATUS_MASK) != AsyncStatus::Started.as_raw() {
             return;
@@ -278,13 +336,39 @@ where
             return;
         }
 
-        let poll = unsafe { Self::poll_inner(ptr) };
-        match poll {
-            Poll::Ready(value) => {
-                unsafe { Self::complete(ptr, value) };
-                unsafe { Self::release(ptr) };
+        let waker = unsafe { Waker::from_raw(Self::raw_waker_borrowed(ptr)) };
+        let mut cx = Context::from_waker(&waker);
+        let mut polls_left: u32 = 64;
+        loop {
+            let poll = unsafe { Self::poll_with(ptr, &mut cx) };
+            match poll {
+                Poll::Ready(value) => {
+                    unsafe { Self::complete(ptr, value) };
+                    unsafe { Self::release(ptr) };
+                    return;
+                }
+                Poll::Pending => {
+                    let status = unsafe { &(*ptr.as_ptr()).header.status }.load(Ordering::Acquire);
+                    if (status & FLAG_DPC_QUEUED) == 0 {
+                        unsafe { Self::finish_pending(ptr) };
+                        return;
+                    }
+                    if polls_left == 0 {
+                        unsafe { Self::finish_pending(ptr) };
+                        return;
+                    }
+
+                    let pending = unsafe { &(*ptr.as_ptr()).header.status }
+                        .fetch_and(!FLAG_DPC_QUEUED, Ordering::AcqRel);
+                    if (pending & FLAG_DPC_QUEUED) == 0 {
+                        unsafe { Self::finish_pending(ptr) };
+                        return;
+                    }
+
+                    polls_left = polls_left.saturating_sub(1);
+                    continue;
+                }
             }
-            Poll::Pending => unsafe { Self::finish_pending(ptr) },
         }
     }
 
@@ -526,7 +610,9 @@ where
         );
     }
 
-    let poll = unsafe { FusedTask::<T, F>::poll_inner(ptr) };
+    let waker = unsafe { Waker::from_raw(FusedTask::<T, F>::raw_waker_borrowed(ptr)) };
+    let mut cx = Context::from_waker(&waker);
+    let poll = unsafe { FusedTask::<T, F>::poll_with(ptr, &mut cx) };
     match poll {
         Poll::Ready(value) => {
             unsafe { FusedTask::<T, F>::complete(ptr, value) };
@@ -556,32 +642,17 @@ where
     }
 }
 
-struct Slab {
-    list: UnsafeCell<MaybeUninit<NPAGED_LOOKASIDE_LIST>>,
+struct SlabPools {
+    lists: *mut SLIST_HEADER,
+    cpu_count: usize,
 }
 
-unsafe impl Sync for Slab {}
+unsafe impl Sync for SlabPools {}
 
-impl Slab {
-    const fn new() -> Self {
-        Self {
-            list: UnsafeCell::new(MaybeUninit::uninit()),
-        }
-    }
-
-    #[inline]
-    unsafe fn as_ptr(&self) -> PNPAGED_LOOKASIDE_LIST {
-        unsafe { (*self.list.get()).as_mut_ptr() }
-    }
-}
-
-static SLABS: [Slab; SLAB_COUNT] = [
-    Slab::new(),
-    Slab::new(),
-    Slab::new(),
-    Slab::new(),
-    Slab::new(),
-];
+static mut SLAB_POOLS: SlabPools = SlabPools {
+    lists: core::ptr::null_mut(),
+    cpu_count: 0,
+};
 
 #[doc(hidden)]
 /// Initialize fused async COM slab allocators (call at PASSIVE_LEVEL).
@@ -623,18 +694,41 @@ fn ensure_slabs_ready() {
         return;
     }
 
-    for (idx, slab) in SLABS.iter().enumerate() {
+    let cpu_count = unsafe { KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS as u16) } as usize;
+    if cpu_count == 0 {
+        slab_init_failure();
+    }
+
+    let total = match SLAB_COUNT.checked_mul(cpu_count) {
+        Some(value) => value,
+        None => slab_init_failure(),
+    };
+    let bytes = match total.checked_mul(core::mem::size_of::<SLIST_HEADER>()) {
+        Some(value) => value,
+        None => slab_init_failure(),
+    };
+
+    let lists = unsafe {
+        alloc_aligned(
+            wdk_sys::_POOL_TYPE::NonPagedPoolNx as u32,
+            bytes,
+            SLAB_TAG,
+            core::mem::align_of::<SLIST_HEADER>(),
+        ) as *mut SLIST_HEADER
+    };
+    if lists.is_null() {
+        slab_init_failure();
+    }
+
+    for idx in 0..total {
         unsafe {
-            ExInitializeNPagedLookasideList(
-                slab.as_ptr(),
-                Some(slab_allocate),
-                Some(slab_free_entry),
-                0,
-                SLAB_SIZES[idx] as SIZE_T,
-                SLAB_TAG,
-                0,
-            );
+            InitializeSListHead(lists.add(idx));
         }
+    }
+
+    unsafe {
+        SLAB_POOLS.lists = lists;
+        SLAB_POOLS.cpu_count = cpu_count;
     }
 
     SLABS_STATE.store(SLABS_STATE_READY, Ordering::Release);
@@ -646,7 +740,14 @@ unsafe fn slab_alloc(index: usize) -> *mut u8 {
     if index >= SLAB_COUNT {
         return core::ptr::null_mut();
     }
-    unsafe { ExAllocateFromNPagedLookasideList(SLABS[index].as_ptr()) as *mut u8 }
+    let head = unsafe { slab_list_head(index) };
+    let entry = unsafe { ExpInterlockedPopEntrySList(head) };
+    if !entry.is_null() {
+        metrics::inc_slab_hit();
+        return entry as *mut u8;
+    }
+    metrics::inc_slab_miss();
+    slab_alloc_slow(index)
 }
 
 #[inline]
@@ -654,19 +755,49 @@ unsafe fn slab_free_indexed(index: usize, ptr: *mut u8) {
     if index >= SLAB_COUNT {
         return;
     }
-    unsafe { ExFreeToNPagedLookasideList(SLABS[index].as_ptr(), ptr as PVOID) };
-}
-
-unsafe extern "C" fn slab_allocate(pool_type: POOL_TYPE, size: SIZE_T, tag: ULONG) -> PVOID {
+    if ptr.is_null() {
+        return;
+    }
+    let head = unsafe { slab_list_head(index) };
     unsafe {
-        alloc_aligned(pool_type as u32, size as usize, tag, SLAB_ALIGN) as PVOID
+        ExpInterlockedPushEntrySList(head, ptr as PSLIST_ENTRY);
     }
 }
 
-unsafe extern "C" fn slab_free_entry(entry: PVOID) {
+#[inline]
+unsafe fn slab_alloc_slow(index: usize) -> *mut u8 {
+    let size = SLAB_SIZES[index];
     unsafe {
-        free_aligned(entry as *mut u8, SLAB_TAG);
+        alloc_aligned(
+            wdk_sys::_POOL_TYPE::NonPagedPoolNx as u32,
+            size,
+            SLAB_TAG,
+            SLAB_ALIGN,
+        )
     }
+}
+
+#[inline]
+unsafe fn slab_list_head(index: usize) -> *mut SLIST_HEADER {
+    let cpu_index = unsafe { current_cpu_index() };
+    let pools = unsafe { &SLAB_POOLS };
+    if pools.lists.is_null() || pools.cpu_count == 0 {
+        slab_init_failure();
+    }
+    let cpu = if cpu_index < pools.cpu_count {
+        cpu_index
+    } else {
+        cpu_index % pools.cpu_count
+    };
+    unsafe { pools.lists.add(index * pools.cpu_count + cpu) }
+}
+
+#[inline]
+unsafe fn current_cpu_index() -> usize {
+    let mut proc = PROCESSOR_NUMBER::default();
+    let proc_ptr = core::ptr::addr_of_mut!(proc);
+    unsafe { KeGetCurrentProcessorNumberEx(proc_ptr) };
+    unsafe { KeGetProcessorIndexFromNumber(proc_ptr) as usize }
 }
 
 #[inline]
@@ -768,6 +899,22 @@ fn resurrection_violation() -> ! {
 
     unsafe {
         crate::ntddk::KeBugCheckEx(0x4B43_4F4D, 0x5245_5355, 0, 0, 0);
+    }
+
+    #[allow(unreachable_code)]
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn slab_init_failure() -> ! {
+    #[cfg(debug_assertions)]
+    crate::trace::report_error(file!(), line!(), STATUS_UNSUCCESSFUL);
+
+    unsafe {
+        crate::ntddk::KeBugCheckEx(0x4B43_4F4D, 0x534C_4954, 0, 0, 0);
     }
 
     #[allow(unreachable_code)]

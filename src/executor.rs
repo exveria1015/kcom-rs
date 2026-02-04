@@ -69,6 +69,8 @@ use crate::iunknown::STATUS_INSUFFICIENT_RESOURCES;
 use crate::allocator::{Allocator, KBox, PoolType, WdkAllocator};
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::refcount;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+use crate::async_com_metrics as metrics;
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 use crate::ntddk::{
@@ -98,6 +100,7 @@ struct TaskVTable {
 struct TaskHeader {
     ref_count: AtomicU32,
     scheduled: AtomicU32,
+    running: AtomicU32,
     completed: AtomicU32,
     cancel_requested: AtomicU32,
     dpc: KDPC,
@@ -337,6 +340,16 @@ impl TaskHeader {
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
+            metrics::inc_dpc_skipped();
+            return;
+        }
+
+        if unsafe { &*ptr.as_ptr() }
+            .running
+            .load(Ordering::Acquire)
+            != 0
+        {
+            metrics::inc_dpc_skipped();
             return;
         }
 
@@ -350,7 +363,10 @@ impl TaskHeader {
         };
 
         if inserted == 0 {
+            metrics::inc_dpc_skipped();
             unsafe { Self::release(ptr) };
+        } else {
+            metrics::inc_dpc_enqueued();
         }
     }
 
@@ -366,7 +382,10 @@ impl TaskHeader {
         };
 
         if inserted == 0 {
+            metrics::inc_dpc_skipped();
             unsafe { Self::release(ptr) };
+        } else {
+            metrics::inc_dpc_enqueued();
         }
     }
 
@@ -381,19 +400,23 @@ impl TaskHeader {
             None => return,
         };
 
+        metrics::inc_dpc_run();
+
         let cpu_index = current_cpu_index();
         unsafe { &*ptr.as_ptr() }.scheduled.store(0, Ordering::Release);
+        unsafe { &*ptr.as_ptr() }.running.store(1, Ordering::Release);
 
         if unsafe { &*ptr.as_ptr() }
             .completed
             .load(Ordering::Acquire)
             != 0
         {
+            unsafe { &*ptr.as_ptr() }.running.store(0, Ordering::Release);
             unsafe { Self::release(ptr) };
             return;
         }
 
-        let waker = unsafe { Waker::from_raw(Self::raw_waker(ptr)) };
+        let waker = unsafe { Waker::from_raw(Self::raw_waker_borrowed(ptr)) };
         let mut cx = Context::from_waker(&waker);
 
         if let Some(cpu_index) = cpu_index {
@@ -414,9 +437,11 @@ impl TaskHeader {
         let mut time_check_counter: u32 = 0;
 
         loop {
+            metrics::inc_poll_total();
             let poll = unsafe { ((*ptr.as_ptr()).vtable.poll)(ptr.as_ptr(), &mut cx) };
             match poll {
                 Poll::Ready(_status) => {
+                    metrics::inc_poll_ready();
                     unsafe { &*ptr.as_ptr() }.completed.store(1, Ordering::Release);
                     unsafe {
                         ((*ptr.as_ptr()).vtable.destroy)(ptr.as_ptr(), DestroyMode::Drop)
@@ -428,9 +453,14 @@ impl TaskHeader {
                     return;
                 }
                 Poll::Pending => {
+                    metrics::inc_poll_pending();
+                    let scheduled = unsafe { &*ptr.as_ptr() }.scheduled.load(Ordering::Acquire);
+                    if scheduled == 0 {
+                        break;
+                    }
                     let woken = unsafe { &*ptr.as_ptr() }
                         .scheduled
-                        .load(Ordering::Acquire)
+                        .swap(0, Ordering::AcqRel)
                         != 0;
                     if !woken {
                         break;
@@ -459,10 +489,6 @@ impl TaskHeader {
                         unsafe { Self::queue_dpc(ptr) };
                         break;
                     }
-
-                    unsafe { &*ptr.as_ptr() }
-                        .scheduled
-                        .store(0, Ordering::Release);
                 }
             }
         }
@@ -470,31 +496,59 @@ impl TaskHeader {
         if let Some(cpu_index) = cpu_index {
             unsafe { clear_current_task(cpu_index) };
         }
+        let late_wake = unsafe { &*ptr.as_ptr() }
+            .scheduled
+            .swap(0, Ordering::AcqRel)
+            != 0;
+        unsafe { &*ptr.as_ptr() }.running.store(0, Ordering::Release);
+        if late_wake {
+            unsafe { Self::queue_dpc(ptr) };
+        } else {
+            let late_after = unsafe { &*ptr.as_ptr() }
+                .scheduled
+                .swap(0, Ordering::AcqRel)
+                != 0;
+            if late_after {
+                unsafe { Self::queue_dpc(ptr) };
+            }
+        }
         unsafe { Self::release(ptr) };
     }
 
     #[inline]
-    unsafe fn raw_waker(ptr: NonNull<Self>) -> RawWaker {
+    unsafe fn raw_waker_owned(ptr: NonNull<Self>) -> RawWaker {
         unsafe { Self::add_ref(ptr) };
         RawWaker::new(ptr.as_ptr() as *const (), &Self::RAW_WAKER_VTABLE)
     }
 
+    #[inline]
+    unsafe fn raw_waker_borrowed(ptr: NonNull<Self>) -> RawWaker {
+        RawWaker::new(ptr.as_ptr() as *const (), &Self::RAW_WAKER_BORROWED_VTABLE)
+    }
+
     const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
-        Self::clone_raw,
-        Self::wake_raw,
-        Self::wake_by_ref_raw,
-        Self::drop_raw,
+        Self::clone_raw_owned,
+        Self::wake_raw_owned,
+        Self::wake_by_ref_raw_owned,
+        Self::drop_raw_owned,
     );
 
-    unsafe fn clone_raw(ptr: *const ()) -> RawWaker {
+    const RAW_WAKER_BORROWED_VTABLE: RawWakerVTable = RawWakerVTable::new(
+        Self::clone_raw_owned,
+        Self::wake_raw_borrowed,
+        Self::wake_by_ref_raw_borrowed,
+        Self::drop_raw_borrowed,
+    );
+
+    unsafe fn clone_raw_owned(ptr: *const ()) -> RawWaker {
         let ptr = match NonNull::new(ptr as *mut TaskHeader) {
             Some(p) => p,
             None => return RawWaker::new(null_mut(), &Self::RAW_WAKER_VTABLE),
         };
-        unsafe { Self::raw_waker(ptr) }
+        unsafe { Self::raw_waker_owned(ptr) }
     }
 
-    unsafe fn wake_raw(ptr: *const ()) {
+    unsafe fn wake_raw_owned(ptr: *const ()) {
         let ptr = match NonNull::new(ptr as *mut TaskHeader) {
             Some(p) => p,
             None => return,
@@ -503,7 +557,7 @@ impl TaskHeader {
         unsafe { Self::release(ptr) };
     }
 
-    unsafe fn wake_by_ref_raw(ptr: *const ()) {
+    unsafe fn wake_by_ref_raw_owned(ptr: *const ()) {
         let ptr = match NonNull::new(ptr as *mut TaskHeader) {
             Some(p) => p,
             None => return,
@@ -511,13 +565,31 @@ impl TaskHeader {
         unsafe { Self::schedule(ptr) };
     }
 
-    unsafe fn drop_raw(ptr: *const ()) {
+    unsafe fn drop_raw_owned(ptr: *const ()) {
         let ptr = match NonNull::new(ptr as *mut TaskHeader) {
             Some(p) => p,
             None => return,
         };
         unsafe { Self::release(ptr) };
     }
+
+    unsafe fn wake_raw_borrowed(ptr: *const ()) {
+        let ptr = match NonNull::new(ptr as *mut TaskHeader) {
+            Some(p) => p,
+            None => return,
+        };
+        unsafe { Self::schedule(ptr) };
+    }
+
+    unsafe fn wake_by_ref_raw_borrowed(ptr: *const ()) {
+        let ptr = match NonNull::new(ptr as *mut TaskHeader) {
+            Some(p) => p,
+            None => return,
+        };
+        unsafe { Self::schedule(ptr) };
+    }
+
+    unsafe fn drop_raw_borrowed(_ptr: *const ()) {}
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
@@ -563,6 +635,7 @@ where
                     header: TaskHeader {
                         ref_count: AtomicU32::new(1),
                         scheduled: AtomicU32::new(0),
+                        running: AtomicU32::new(0),
                         completed: AtomicU32::new(0),
                         cancel_requested: AtomicU32::new(0),
                         dpc: core::mem::zeroed(),
@@ -1311,7 +1384,7 @@ where
             unsafe { &*ptr.as_ptr() }.completed.store(1, Ordering::Release);
             unsafe { ManuallyDrop::drop(&mut (*ptr.as_ptr()).future) };
         } else {
-            let waker = unsafe { Waker::from_raw(Self::raw_waker(ptr)) };
+            let waker = unsafe { Waker::from_raw(Self::raw_waker_borrowed(ptr)) };
             let mut cx = Context::from_waker(&waker);
 
             let poll = unsafe {
@@ -1338,27 +1411,39 @@ where
     }
 
     #[inline]
-    unsafe fn raw_waker(ptr: NonNull<Self>) -> RawWaker {
+    unsafe fn raw_waker_owned(ptr: NonNull<Self>) -> RawWaker {
         unsafe { Self::add_ref(ptr) };
         RawWaker::new(ptr.as_ptr() as *const (), &Self::RAW_WAKER_VTABLE)
     }
 
+    #[inline]
+    unsafe fn raw_waker_borrowed(ptr: NonNull<Self>) -> RawWaker {
+        RawWaker::new(ptr.as_ptr() as *const (), &Self::RAW_WAKER_BORROWED_VTABLE)
+    }
+
     const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
-        Self::clone_raw,
-        Self::wake_raw,
-        Self::wake_by_ref_raw,
-        Self::drop_raw,
+        Self::clone_raw_owned,
+        Self::wake_raw_owned,
+        Self::wake_by_ref_raw_owned,
+        Self::drop_raw_owned,
     );
 
-    unsafe fn clone_raw(ptr: *const ()) -> RawWaker {
+    const RAW_WAKER_BORROWED_VTABLE: RawWakerVTable = RawWakerVTable::new(
+        Self::clone_raw_owned,
+        Self::wake_raw_borrowed,
+        Self::wake_by_ref_raw_borrowed,
+        Self::drop_raw_borrowed,
+    );
+
+    unsafe fn clone_raw_owned(ptr: *const ()) -> RawWaker {
         let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
             Some(p) => p,
             None => return RawWaker::new(core::ptr::null(), &Self::RAW_WAKER_VTABLE),
         };
-        unsafe { Self::raw_waker(ptr) }
+        unsafe { Self::raw_waker_owned(ptr) }
     }
 
-    unsafe fn wake_raw(ptr: *const ()) {
+    unsafe fn wake_raw_owned(ptr: *const ()) {
         let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
             Some(p) => p,
             None => return,
@@ -1367,7 +1452,7 @@ where
         unsafe { Self::release(ptr) };
     }
 
-    unsafe fn wake_by_ref_raw(ptr: *const ()) {
+    unsafe fn wake_by_ref_raw_owned(ptr: *const ()) {
         let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
             Some(p) => p,
             None => return,
@@ -1375,13 +1460,31 @@ where
         let _ = unsafe { Self::schedule(ptr) };
     }
 
-    unsafe fn drop_raw(ptr: *const ()) {
+    unsafe fn drop_raw_owned(ptr: *const ()) {
         let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
             Some(p) => p,
             None => return,
         };
         unsafe { Self::release(ptr) };
     }
+
+    unsafe fn wake_raw_borrowed(ptr: *const ()) {
+        let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
+            Some(p) => p,
+            None => return,
+        };
+        let _ = unsafe { Self::schedule(ptr) };
+    }
+
+    unsafe fn wake_by_ref_raw_borrowed(ptr: *const ()) {
+        let ptr = match NonNull::new(ptr as *mut WorkItemTask<F>) {
+            Some(p) => p,
+            None => return,
+        };
+        let _ = unsafe { Self::schedule(ptr) };
+    }
+
+    unsafe fn drop_raw_borrowed(_ptr: *const ()) {}
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", driver_model__driver_type = "WDM", not(miri)))]

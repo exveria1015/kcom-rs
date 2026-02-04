@@ -19,6 +19,7 @@ pub use macros::*;
 pub mod smart_ptr;
 pub mod task;
 pub mod vtable;
+pub mod async_com_metrics;
 mod refcount;
 pub mod trace;
 mod guard_ptr;
@@ -44,6 +45,7 @@ pub use traits::{ComImpl, IUnknown, IUnknownInterface};
 pub use vtable::{ComInterfaceInfo, InterfaceVtable, match_interface_ptr};
 pub use smart_ptr::{ComInterface, ComRc, ThreadSafeComInterface};
 pub use trace::{clear_trace_hook, set_trace_hook, TraceHook};
+pub use async_com_metrics::{AsyncComMetrics, reset_async_com_metrics, snapshot_async_com_metrics};
 pub use allocator::{
     Allocator, GlobalAllocator, InitBox, InitBoxTrait, KBox, KBoxError, PinInit, PinInitOnce,
 };
