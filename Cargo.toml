@@ -24,6 +24,7 @@ criterion = "0.5"
 [features]
 default = []
 async-com = []
+async-com-metrics = []
 async-impl = ["async-com", "async-trait"]
 async-com-kernel = ["async-com", "wdk-sys"]
 async-com-fused = ["async-com-kernel"]
@@ -70,5 +71,8 @@ harness = false
 required-features = ["async-com"]
 
 [workspace]
-members = [".", "kcom-tests"]
+members = [".", "driver-test", "driver-test-fused", "kcom-tests", "tokio-bench", "io-bench"]
 resolver = "2"
+
+[profile.release]
+panic = "abort"

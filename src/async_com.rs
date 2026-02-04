@@ -23,6 +23,13 @@ use crate::traits::ComImpl;
 use crate::vtable::InterfaceVtable;
 use crate::wrapper::{ComObject, PanicGuard};
 
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+mod pool;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub use pool::{init_async_com_pool_for, set_async_com_pool_depth, set_async_com_pool_tag};
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub use pool::shutdown_async_com_pool_for;
+
 #[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
 mod fused;
 #[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
@@ -157,6 +164,25 @@ impl<T: AsyncValueType> AsyncOperationRaw<T> {
     }
 }
 
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+type AsyncComAlloc<T> = pool::AsyncComAlloc<T>;
+#[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
+type AsyncComAlloc<T> = crate::allocator::GlobalAllocator;
+
+#[inline]
+fn async_com_alloc<T: AsyncValueType>() -> AsyncComAlloc<T> {
+    #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+    {
+        return AsyncComAlloc::<T>::new();
+    }
+    #[cfg(any(not(all(feature = "driver", feature = "async-com-kernel")), miri))]
+    {
+        crate::allocator::GlobalAllocator
+    }
+}
+
+type TaskComObject<T, F> = ComObject<AsyncOperationTask<T, F>, AsyncOperationVtbl<T>, AsyncComAlloc<T>>;
+
 pub struct AsyncOperationTask<T, F>
 where
     T: AsyncValueType,
@@ -267,11 +293,11 @@ where
     pub fn spawn_raw_cancellable(
         future: F,
     ) -> Result<(*mut AsyncOperationRaw<T>, CancelHandle), NTSTATUS> {
-        let ptr = ComObject::<Self, AsyncOperationVtbl<T>>::new(Self::new_state())?;
+        let ptr = TaskComObject::<T, F>::new_in(Self::new_state(), async_com_alloc::<T>())?;
 
         // Hold a reference while the async task runs.
         unsafe {
-            ComObject::<Self, AsyncOperationVtbl<T>>::shim_add_ref(ptr);
+            TaskComObject::<T, F>::shim_add_ref(ptr);
         }
 
         struct TaskGuard<T, F>
@@ -290,7 +316,7 @@ where
         {
             fn drop(&mut self) {
                 unsafe {
-                    ComObject::<AsyncOperationTask<T, F>, AsyncOperationVtbl<T>>::shim_release(
+                    TaskComObject::<T, F>::shim_release(
                         self.ptr.as_ptr(),
                     );
                 }
@@ -305,7 +331,7 @@ where
             };
 
             let result = crate::task::try_finally(future, async {}).await;
-            let wrapper = unsafe { ComObject::<Self, AsyncOperationVtbl<T>>::from_ptr(task_ptr.as_ptr()) };
+            let wrapper = unsafe { TaskComObject::<T, F>::from_ptr(task_ptr.as_ptr()) };
             match result {
                 Some(value) => wrapper.inner.store_result(value),
                 None => wrapper.inner.store_canceled(),
@@ -317,8 +343,8 @@ where
             Ok(handle) => handle,
             Err(status) => {
                 unsafe {
-                    ComObject::<Self, AsyncOperationVtbl<T>>::shim_release(ptr);
-                    ComObject::<Self, AsyncOperationVtbl<T>>::shim_release(ptr);
+                    TaskComObject::<T, F>::shim_release(ptr);
+                    TaskComObject::<T, F>::shim_release(ptr);
                 }
                 return Err(status);
             }
@@ -330,7 +356,7 @@ where
     pub fn spawn_error_raw(status: NTSTATUS) -> Result<*mut AsyncOperationRaw<T>, NTSTATUS> {
         let task = Self::new_state();
         task.store_error(status);
-        let ptr = ComObject::<Self, AsyncOperationVtbl<T>>::new(task)?;
+        let ptr = TaskComObject::<T, F>::new_in(task, async_com_alloc::<T>())?;
         Ok(ptr as *mut AsyncOperationRaw<T>)
     }
 
@@ -358,7 +384,7 @@ where
             return STATUS_UNSUCCESSFUL;
         }
         let guard = PanicGuard::new();
-        let wrapper = unsafe { &*(this as *const ComObject<Self, AsyncOperationVtbl<T>>) };
+        let wrapper = unsafe { &*(this as *const TaskComObject<T, F>) };
         let status = wrapper.inner.load_status();
         unsafe {
             *out_status = status;
@@ -377,7 +403,7 @@ where
             return STATUS_UNSUCCESSFUL;
         }
         let guard = PanicGuard::new();
-        let wrapper = unsafe { &*(this as *const ComObject<Self, AsyncOperationVtbl<T>>) };
+        let wrapper = unsafe { &*(this as *const TaskComObject<T, F>) };
         let result = match wrapper.inner.load_status() {
             AsyncStatus::Completed => {
                 let value = wrapper.inner.read_result();

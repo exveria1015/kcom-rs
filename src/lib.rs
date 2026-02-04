@@ -79,6 +79,13 @@ pub use async_com::{
     AsyncStatus,
     AsyncValueType,
 };
+#[cfg(all(feature = "async-com", feature = "driver", feature = "async-com-kernel", not(miri)))]
+pub use async_com::{
+    init_async_com_pool_for,
+    set_async_com_pool_depth,
+    set_async_com_pool_tag,
+    shutdown_async_com_pool_for,
+};
 #[cfg(all(feature = "async-com-fused", feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub use async_com::init_async_com_slabs;
 
@@ -93,13 +100,14 @@ pub use executor::spawn_task;
 pub use executor::{
     set_task_alloc_tag,
     set_task_budget,
+    set_task_budget_adaptive_thresholds,
     spawn_dpc_task,
     spawn_dpc_task_cancellable_tracked,
     spawn_dpc_task_tracked,
     TaskBudget,
     TaskTracker,
 };
-pub use task::{try_finally, Cancellable};
+pub use task::{cooperative, try_finally, yield_now, Cancellable, Cooperative, YieldNow};
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 pub use executor::KernelTimerFuture;
 #[cfg(all(

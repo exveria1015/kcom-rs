@@ -114,9 +114,19 @@ const DEFAULT_TASK_BUDGET_POLLS: u32 = 64;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 const DEFAULT_TASK_BUDGET_TIME_US: u64 = 200;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const DEFAULT_TASK_BUDGET_ADAPTIVE_MIN: u32 = 16;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const DEFAULT_TASK_BUDGET_ADAPTIVE_MAX: u32 = 128;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const DEFAULT_TASK_BUDGET_ADAPTIVE_LOW_PCT: u32 = 5;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const DEFAULT_TASK_BUDGET_ADAPTIVE_HIGH_PCT: u32 = 50;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 const TASK_BUDGET_MODE_POLLS: u32 = 0;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 const TASK_BUDGET_MODE_TIME_US: u32 = 1;
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+const TASK_BUDGET_MODE_ADAPTIVE: u32 = 2;
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 const TASK_BUDGET_TIME_CHECK_INTERVAL: u32 = 8;
 
@@ -126,12 +136,25 @@ static TASK_BUDGET_MODE: AtomicU32 = AtomicU32::new(TASK_BUDGET_MODE_POLLS);
 static TASK_BUDGET_POLLS: AtomicU32 = AtomicU32::new(DEFAULT_TASK_BUDGET_POLLS);
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 static TASK_BUDGET_TIME_US: AtomicU64 = AtomicU64::new(DEFAULT_TASK_BUDGET_TIME_US);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_ADAPTIVE_MIN: AtomicU32 = AtomicU32::new(DEFAULT_TASK_BUDGET_ADAPTIVE_MIN);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_ADAPTIVE_MAX: AtomicU32 = AtomicU32::new(DEFAULT_TASK_BUDGET_ADAPTIVE_MAX);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_ADAPTIVE_LOW_PCT: AtomicU32 = AtomicU32::new(DEFAULT_TASK_BUDGET_ADAPTIVE_LOW_PCT);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_ADAPTIVE_HIGH_PCT: AtomicU32 = AtomicU32::new(DEFAULT_TASK_BUDGET_ADAPTIVE_HIGH_PCT);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_ADAPTIVE_LAST_SKIPPED: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+static TASK_BUDGET_ADAPTIVE_LAST_ENQUEUED: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
 #[derive(Copy, Clone, Debug)]
 pub enum TaskBudget {
     Polls(u32),
     TimeUs(u64),
+    Adaptive { min_polls: u32, max_polls: u32 },
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
@@ -139,6 +162,7 @@ pub enum TaskBudget {
 ///
 /// - `Polls(n)` matches the original behavior (poll at most n times per DPC run).
 /// - `TimeUs(us)` limits execution time using `KeQueryPerformanceCounter`.
+/// - `Adaptive { min_polls, max_polls }` varies the poll budget based on DPC pressure.
 #[inline]
 pub fn set_task_budget(budget: TaskBudget) {
     match budget {
@@ -150,7 +174,72 @@ pub fn set_task_budget(budget: TaskBudget) {
             TASK_BUDGET_TIME_US.store(us, Ordering::Release);
             TASK_BUDGET_MODE.store(TASK_BUDGET_MODE_TIME_US, Ordering::Release);
         }
+        TaskBudget::Adaptive { min_polls, max_polls } => {
+            let min = min_polls.min(max_polls);
+            let max = max_polls.max(min_polls);
+            TASK_BUDGET_ADAPTIVE_MIN.store(min, Ordering::Release);
+            TASK_BUDGET_ADAPTIVE_MAX.store(max, Ordering::Release);
+            TASK_BUDGET_MODE.store(TASK_BUDGET_MODE_ADAPTIVE, Ordering::Release);
+        }
     }
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+/// Adjust the adaptive budget thresholds (percent skipped DPCs).
+///
+/// `low_pct` picks the max budget, `high_pct` picks the min budget.
+#[inline]
+pub fn set_task_budget_adaptive_thresholds(low_pct: u32, high_pct: u32) {
+    let low = low_pct.min(100);
+    let high = high_pct.max(low).min(100);
+    TASK_BUDGET_ADAPTIVE_LOW_PCT.store(low, Ordering::Release);
+    TASK_BUDGET_ADAPTIVE_HIGH_PCT.store(high, Ordering::Release);
+}
+
+#[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
+#[inline]
+fn adaptive_poll_budget() -> u32 {
+    let min = TASK_BUDGET_ADAPTIVE_MIN.load(Ordering::Acquire);
+    let max = TASK_BUDGET_ADAPTIVE_MAX.load(Ordering::Acquire).max(min);
+    if max == min {
+        return min;
+    }
+
+    let low = TASK_BUDGET_ADAPTIVE_LOW_PCT.load(Ordering::Acquire).min(100);
+    let high = TASK_BUDGET_ADAPTIVE_HIGH_PCT
+        .load(Ordering::Acquire)
+        .max(low)
+        .min(100);
+
+    let metrics = metrics::snapshot_async_com_metrics();
+    let skipped = metrics.dpc_skipped;
+    let enqueued = metrics.dpc_enqueued;
+    let prev_skipped = TASK_BUDGET_ADAPTIVE_LAST_SKIPPED.swap(skipped, Ordering::AcqRel);
+    let prev_enqueued = TASK_BUDGET_ADAPTIVE_LAST_ENQUEUED.swap(enqueued, Ordering::AcqRel);
+    let delta_skipped = skipped.saturating_sub(prev_skipped);
+    let delta_enqueued = enqueued.saturating_sub(prev_enqueued);
+    let ratio = if delta_enqueued == 0 {
+        0
+    } else {
+        let percent = delta_skipped.saturating_mul(100) / delta_enqueued;
+        percent.min(u32::MAX as u64) as u32
+    };
+
+    if ratio <= low {
+        return max;
+    }
+    if ratio >= high {
+        return min;
+    }
+
+    let span = high - low;
+    if span == 0 {
+        return min;
+    }
+    let pos = ratio - low;
+    let range = max - min;
+    let scaled = range - (range.saturating_mul(pos) / span);
+    min + scaled
 }
 
 #[cfg(all(feature = "driver", feature = "async-com-kernel", not(miri)))]
@@ -423,7 +512,11 @@ impl TaskHeader {
             unsafe { set_current_task(cpu_index, ptr) };
         }
         let budget_mode = TASK_BUDGET_MODE.load(Ordering::Acquire);
-        let mut poll_budget = TASK_BUDGET_POLLS.load(Ordering::Acquire);
+        let mut poll_budget = if budget_mode == TASK_BUDGET_MODE_ADAPTIVE {
+            adaptive_poll_budget()
+        } else {
+            TASK_BUDGET_POLLS.load(Ordering::Acquire)
+        };
         let (time_budget_ticks, time_start_ticks) = if budget_mode == TASK_BUDGET_MODE_TIME_US {
             let mut freq = LARGE_INTEGER { QuadPart: 0 };
             let start = unsafe { KeQueryPerformanceCounter(&mut freq) };
@@ -467,7 +560,9 @@ impl TaskHeader {
                     }
 
                     let mut budget_exhausted = false;
-                    if budget_mode == TASK_BUDGET_MODE_POLLS {
+                    if budget_mode == TASK_BUDGET_MODE_POLLS
+                        || budget_mode == TASK_BUDGET_MODE_ADAPTIVE
+                    {
                         if poll_budget == 0 {
                             budget_exhausted = true;
                         } else {

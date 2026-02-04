@@ -106,3 +106,79 @@ where
 {
     Cancellable::new(main, cleanup)
 }
+
+/// A future that yields once before completing.
+#[must_use]
+pub struct YieldNow {
+    yielded: bool,
+}
+
+impl Future for YieldNow {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.yielded {
+            Poll::Ready(())
+        } else {
+            self.yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+/// Yield execution back to the executor once.
+#[inline]
+pub fn yield_now() -> YieldNow {
+    YieldNow { yielded: false }
+}
+
+/// Wrap a future and force cooperative yielding every `interval` polls.
+#[must_use]
+pub struct Cooperative<F> {
+    inner: F,
+    interval: u32,
+    polls: u32,
+}
+
+impl<F> Cooperative<F> {
+    #[inline]
+    fn new(inner: F, interval: u32) -> Self {
+        Self {
+            inner,
+            interval,
+            polls: 0,
+        }
+    }
+}
+
+impl<F> Future for Cooperative<F>
+where
+    F: Future,
+{
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+        if this.interval != 0 && this.polls >= this.interval {
+            this.polls = 0;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+
+        let poll = unsafe { Pin::new_unchecked(&mut this.inner) }.poll(cx);
+        if poll.is_pending() && this.interval != 0 {
+            this.polls = this.polls.saturating_add(1);
+        }
+        poll
+    }
+}
+
+/// Wrap a future to yield every `interval` polls (0 disables forced yields).
+#[inline]
+pub fn cooperative<F>(inner: F, interval: u32) -> Cooperative<F>
+where
+    F: Future,
+{
+    Cooperative::new(inner, interval)
+}
